@@ -292,9 +292,14 @@ fmt-check:
 # house style is guard clauses, and collapsing them into one negated return
 # reads worse. It only started firing under C23, where true/false are the
 # language's own and the check finally sees them.
+# insecureAPI wants C11 Annex K (memcpy_s), which no libc here has; its strcpy
+# check fires only where libc's strcpy is not fortified (glibc, not macOS),
+# and every strcpy here copies a length checked just before or between
+# buffers of one size. not-null-terminated-result reads a memcpy of a part as
+# a string: the terminator here comes with the next copy.
 tidy:
 	$(CLANG_TIDY) --quiet --warnings-as-errors='*' \
-		--checks='bugprone-*,cert-*,clang-analyzer-*,readability-*,-readability-identifier-length,-readability-function-cognitive-complexity,-readability-magic-numbers,-cert-err33-c,-readability-else-after-return,-readability-simplify-boolean-expr,-bugprone-easily-swappable-parameters,-clang-analyzer-optin.performance.Padding,-clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling' \
+		--checks='bugprone-*,cert-*,clang-analyzer-*,readability-*,-readability-identifier-length,-readability-function-cognitive-complexity,-readability-magic-numbers,-cert-err33-c,-readability-else-after-return,-readability-simplify-boolean-expr,-bugprone-easily-swappable-parameters,-clang-analyzer-optin.performance.Padding,-clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,-clang-analyzer-security.insecureAPI.strcpy,-bugprone-not-null-terminated-result' \
 		$(CORE) $(ROC)/host/posix/main.c $(ROC)/host/posix/compose.c $(ROC)/tools/mkunits.c -- -std=c23 $(INC) $(APPFLAGS)
 
 check:
