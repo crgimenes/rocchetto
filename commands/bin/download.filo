@@ -1,0 +1,1 @@
+(if (> (length ARGS) 0) (download (nth ARGS 0)) (echo "usage: download <file>"))

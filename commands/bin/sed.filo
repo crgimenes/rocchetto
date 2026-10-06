@@ -1,0 +1,437 @@
+; sed [-n] [-E] [-i] script [file...], sed [-n] [-E] [-i] (-e script | -f file)... [file...]:
+; each line of the files (or of the input, - or none) into the pattern
+; space, the script run over it, the pattern space written at the end
+; (not with -n). Commands, as POSIX's: { } ! s y a i c d D g G h H l n N
+; p P q r t b : w x = and #; addresses are a line number, $, /re/ (\cre c
+; too) or two of them for a range. -E reads the regexes as ERE; -i writes
+; each file back with what came out of it. An empty // is the regex used
+; last. The text of a, i and c goes after a \ and a newline, or on the
+; same line.
+
+(def usage "usage: sed [-n] [-E] [-i] script [file...] | sed [-nEi] (-e script | -f file)... [file...]")
+(def has (fn (opts letter) (> (length (filter (fn (o) (letv (l val) o (= l letter))) opts)) 0)))
+(def all-of (fn (opts letter) (map (fn (o) (letv (l val) o val)) (filter (fn (o) (letv (l val) o (= l letter))) opts))))
+(def is-stdin (fn (src) (and (= (type-of src) "string") (= src "-"))))
+(def strip (fn (l) (if (and (> (byte-len l) 0) (= (byte-at l (- (byte-len l) 1)) 10)) (byte-sub l 0 (- (byte-len l) 1)) l)))
+(def at (fn (s i) (if (< i (byte-len s)) (byte-sub s i (+ i 1)) "")))
+(def blank (fn (c) (or (= c " ") (= c "\t"))))
+(def skip-blanks (fn (s i) (iterate (fn (j) (if (blank (at s j)) (+ j 1) (list))) i)))
+(def digits (re-compile "^[0-9]+" "E"))
+
+; ---- reading the script: commands as (a1 a2 neg cmd x y z) ----
+; an address is nil, (tuple "n" line), (tuple "$" 0), (tuple "re" handle),
+; or, second in a range, (tuple "+" count): that many lines after the first;
+; x, y, z: s: regex, replacement, flags (g p nth wfile); y: the map; a i c:
+; the text; b t: the label; r w: the file; {: where its } is
+
+; up to the delimiter d from i, a \d inside taken as d: (text next-i)
+(def delimited (fn (s i d)
+  (letv (out j done)
+        (iterate (fn (st)
+                   (letv (out j done) st
+                     (cond (done (list))
+                           ((>= j (byte-len s)) (list))
+                           ((and (= (at s j) "\\") (= (at s (+ j 1)) d)) (tuple (str-concat out d) (+ j 2) #f))
+                           ((and (= (at s j) "\\") (= (at s (+ j 1)) "n") (not (= d "n"))) (tuple (str-concat out "\n") (+ j 2) #f))
+                           ((= (at s j) "\\") (tuple (str-concat out (byte-sub s j (+ j 2))) (+ j 2) #f))
+                           ((= (at s j) d) (tuple out (+ j 1) #t))
+                           (else (tuple (str-concat out (at s j)) (+ j 1) #f)))))
+               (tuple "" i #f))
+    (if done (tuple out j) (tuple out -1)))))
+
+; the regexes: the last one compiled stands for an empty //
+(def compile (fn (pat ere last)
+  (if (= pat "") (if (is-nil last) "no previous regular expression" last)
+    (re-compile pat (if ere "E" "")))))
+
+; one address at i: (address next-i error)
+(def address (fn (s i ere last)
+  (let ((c (at s i)))
+    (cond ((= c "$") (tuple (tuple "$" 0) (+ i 1) ""))
+          ((and (= c "+") (not (is-nil (re-match digits (byte-sub s (+ i 1))))))
+           (letv (a b) (nth (re-match digits (byte-sub s (+ i 1))) 0)
+             (tuple (tuple "+" (number (byte-sub s (+ i 1) (+ i 1 b)))) (+ i 1 b) "")))
+          ((not (is-nil (re-match digits (byte-sub s i))))
+           (letv (a b) (nth (re-match digits (byte-sub s i)) 0)
+             (tuple (tuple "n" (number (byte-sub s i (+ i b)))) (+ i b) "")))
+          ((or (= c "/") (and (= c "\\") (> (byte-len s) (+ i 1))))
+           (let ((d (if (= c "/") "/" (at s (+ i 1)))) (from (if (= c "/") (+ i 1) (+ i 2))))
+             (letv (pat j) (delimited s from d)
+               (if (< j 0) (tuple (list) i "unterminated address regex")
+                 (let ((re (compile pat ere last)))
+                   (if (= (type-of re) "string") (tuple (list) i re) (tuple (tuple "re" re) j "")))))))
+          (else (tuple (list) i ""))))))
+
+; the text of a i c: after \ and a newline (lines ending in \ go on), or
+; the rest of the line: (text next-i)
+(def text-arg (fn (s i)
+  (let ((j (skip-blanks s i)))
+    (if (and (= (at s j) "\\") (= (at s (+ j 1)) "\n"))
+      (letv (out k done)
+            (iterate (fn (st)
+                       (letv (out k done) st
+                         (cond (done (list))
+                               ((>= k (byte-len s)) (tuple out k #t))
+                               ((and (= (at s k) "\\") (= (at s (+ k 1)) "\n")) (tuple (str-concat out "\n") (+ k 2) #f))
+                               ((= (at s k) "\\") (tuple (str-concat out (at s (+ k 1))) (+ k 2) #f))
+                               ((= (at s k) "\n") (tuple out (+ k 1) #t))
+                               (else (tuple (str-concat out (at s k)) (+ k 1) #f)))))
+                   (tuple "" (+ j 2) #f))
+        (tuple out k))
+      (let ((nl (byte-find (byte-sub s j) "\n")))
+        (let ((end (if (< nl 0) (byte-len s) (+ j nl))))
+          (tuple (str-replace "\\" "" (byte-sub s j end)) (if (< nl 0) end (+ end 1)))))))))
+
+; a word up to ; } or a newline (labels, file names): (word next-i)
+(def word-arg (fn (s i stops)
+  (let ((j (skip-blanks s i)))
+    (let ((end (iterate (fn (k) (if (or (>= k (byte-len s)) (= (at s k) "\n") (and stops (or (= (at s k) ";") (= (at s k) "}")))) (list) (+ k 1))) j)))
+      (tuple (byte-sub s j end) end)))))
+
+; where a window of text from at ends: about 4 KB, never inside a character
+(def window (fn (text at)
+  (iterate (fn (e) (if (or (>= e (byte-len text)) (<= e (+ at 1)) (not (= (u32-and (byte-at text e) 192) 128))) (list) (- e 1)))
+           (math-min (byte-len text) (+ at 4096)))))
+
+; y over a pattern space a window at a time; one that is not UTF-8 goes a
+; byte at a time, so that no byte of it changes but the ones named
+(def y-apply (fn (ps pairs)
+  (let ((one (fn (ch) (fold (fn (v p) (letv (f t) p (if (= f ch) t v))) ch pairs))))
+    (letv (at pieces)
+          (iterate (fn (st)
+                     (letv (at pieces) st
+                       (if (>= at (byte-len ps)) (list)
+                         (let ((e (window ps at)))
+                           (let ((w (byte-sub ps at e)))
+                             (tuple e (list-append pieces
+                                                   (str-join "" (if (utf8-valid w) (map (fn (r) (one (utf8-encode r))) (utf8-runes w))
+                                                                  (map (fn (b) (one (bytes b))) (byte-list w)))))))))))
+                   (tuple 0 (list)))
+      (str-join "" pieces)))))
+
+(def y-map (fn (from to)
+  (let ((f (utf8-runes from)) (t (utf8-runes to)))
+    (if (not (= (length f) (length t))) (list)
+      (map (fn (i) (tuple (utf8-encode (nth f i)) (utf8-encode (nth t i)))) (range 0 (length f)))))))
+
+; s///'s flags at i: (g p nth wfile next-i)
+(def s-flags (fn (s i)
+  (iterate (fn (st)
+             (letv (g p n w j) st
+               (let ((c (at s j)))
+                 (cond ((= c "g") (tuple #t p n w (+ j 1)))
+                       ((= c "p") (tuple g #t n w (+ j 1)))
+                       ((= c "w") (letv (f k) (word-arg s (+ j 1) #f) (tuple g p n f k)))
+                       ((not (is-nil (re-match digits (byte-sub s j))))
+                        (letv (a b) (nth (re-match digits (byte-sub s j)) 0)
+                          (tuple g p (number (byte-sub s j (+ j b))) w (+ j b))))
+                       (else (list))))))
+           (tuple #f #f 1 "" i))))
+
+(def label-at (fn (cmds name)
+  (fold (fn (found i) (if (>= found 0) found (letv (a1 a2 neg c x y z) (nth cmds i) (if (and (= c ":") (= x name)) i -1)))) -1 (range 0 (length cmds)))))
+
+; the whole script: (commands error)
+(def parse (fn (s ere)
+  (letv (cmds i err last opens)
+        (iterate
+          (fn (st)
+            (letv (cmds i err last opens) st
+              (let ((j (iterate (fn (k) (let ((c (at s k))) (if (or (blank c) (= c "\n") (= c ";")) (+ k 1) (list)))) i)))
+                (cond ((not (= err "")) (list))
+                      ((>= j (byte-len s)) (list))
+                      ((= (at s j) "#") (tuple cmds (+ j (let ((nl (byte-find (byte-sub s j) "\n"))) (if (< nl 0) (byte-len (byte-sub s j)) nl))) err last opens))
+                      (else
+                        (letv (a1 k1 e1) (address s j ere last)
+                          (let ((last1 (if (and (not (is-nil a1)) (letv (kind v) a1 (= kind "re"))) (letv (kind v) a1 v) last)))
+                            (letv (a2 k2 e2) (if (and (= e1 "") (not (is-nil a1)) (= (at s k1) ",")) (address s (+ k1 1) ere last1) (tuple (list) k1 ""))
+                              (let ((last2 (if (and (not (is-nil a2)) (letv (kind v) a2 (= kind "re"))) (letv (kind v) a2 v) last1))
+                                    (k3 (skip-blanks s k2)))
+                                (let ((neg (= (at s k3) "!")))
+                                  (let ((k (skip-blanks s (if neg (+ k3 1) k3))) )
+                                    (let ((c (at s k)) (mk (fn (x y z) (tuple a1 a2 neg (at s k) x y z))))
+                                      (cond ((not (= e1 "")) (tuple cmds i e1 last opens))
+                                            ((not (= e2 "")) (tuple cmds i e2 last opens))
+                                            ((= c "{") (tuple (list-append cmds (mk 0 0 0)) (+ k 1) err last2 (list-append opens (length cmds))))
+                                            ((= c "}")
+                                             (if (= (length opens) 0) (tuple cmds i "unexpected }" last opens)
+                                               (let ((o (nth opens (- (length opens) 1))))
+                                                 (tuple (list-append (map (fn (n) (if (= n o) (letv (b1 b2 bn bc x y z) (nth cmds n) (tuple b1 b2 bn bc (+ (length cmds) 1) y z)) (nth cmds n))) (range 0 (length cmds)))
+                                                                     (tuple (list) (list) #f "}" 0 0 0))
+                                                        (+ k 1) err last2 (map (fn (n) (nth opens n)) (range 0 (- (length opens) 1)))))))
+                                            ((or (= c "s") (= c "y"))
+                                             (let ((d (at s (+ k 1))))
+                                               (letv (one j1) (delimited s (+ k 2) d)
+                                                 (letv (two j2) (if (< j1 0) (tuple "" -1) (delimited s j1 d))
+                                                   (cond ((or (< j1 0) (< j2 0)) (tuple cmds i (str-concat "unterminated " c) last opens))
+                                                         ((= c "y")
+                                                          (let ((mp (y-map one two)))
+                                                            (if (is-nil mp) (tuple cmds i "y strings differ in length" last opens)
+                                                              (tuple (list-append cmds (mk mp 0 0)) j2 err last2 opens))))
+                                                         (else
+                                                           (let ((re (compile one ere last2)))
+                                                             (if (= (type-of re) "string") (tuple cmds i re last opens)
+                                                               (letv (g p n w j3) (s-flags s j2)
+                                                                 (tuple (list-append cmds (mk re two (tuple g p n w))) j3 err re opens))))))))))
+                                            ((or (= c "a") (= c "i") (= c "c"))
+                                             (letv (t j1) (text-arg s (+ k 1)) (tuple (list-append cmds (mk t 0 0)) j1 err last2 opens)))
+                                            ((or (= c "b") (= c "t") (= c ":") (= c "r") (= c "w"))
+                                             (letv (w j1) (word-arg s (+ k 1) (or (= c "b") (= c "t")))
+                                               (if (and (= c ":") (= w "")) (tuple cmds i "\":\" lacks a label" last opens)
+                                                 (tuple (list-append cmds (mk w 0 0)) j1 err last2 opens))))
+                                            ((or (= c "") (< (byte-find "dDgGhHlnNpPqx=" c) 0))
+                                             (tuple cmds i (str-concat "unknown command: " (if (= c "") "nothing" c)) last opens))
+                                            (else (tuple (list-append cmds (mk 0 0 0)) (+ k 1) err last2 opens)))))))))))))))
+          (tuple (list) 0 "" (list) (list)))
+    (let ((missing (filter (fn (c) (letv (a1 a2 neg cmd x y z) c
+                                     (and (or (= cmd "b") (= cmd "t")) (not (= x "")) (< (label-at cmds x) 0))))
+                           cmds)))
+      (cond ((not (= err "")) (tuple (list) err))
+            ((> (length opens) 0) (tuple (list) "unmatched {"))
+            ((> (length missing) 0) (letv (a1 a2 neg cmd x y z) (nth missing 0) (tuple (list) (str-concat "can't find label for jump to " x))))
+            (else (tuple cmds "")))))))
+
+; ---- running it ----
+
+; the input: the files one after another, a line read ahead to know the
+; last one: (line rest-of-reader); a reader is (names handle ahead)
+(def failures 0)
+(def fail (fn (name why) (do (err-write "sed: " name ": " why "\n") (set failures (+ failures 1)) (list))))
+(def open-name (fn (name)
+  (if (= name "-") "-"
+    (let ((h (file-open name)))
+      (if (= (type-of h) "string") (fail name h) h)))))
+(def raw-line (fn (names h)
+  ; (line names h): nil line at the end of all
+  (iterate (fn (st)
+             (letv (line names h) st
+               (cond ((not (is-nil line)) (list))
+                     ((is-nil h)
+                      (if (= (length names) 0) (list)
+                        (tuple (list) (tail names) (open-name (nth names 0)))))
+                     (else
+                       (let ((l (if (is-stdin h) (in-line) (file-line h))))
+                         (if (is-nil l) (do (if (is-stdin h) #f (file-close h)) (tuple (list) names (list)))
+                           (tuple (strip l) names h)))))))
+           (tuple (list) names h))))
+(def reader-new (fn (names) (letv (l n h) (raw-line names (list)) (tuple l n h))))
+; (line is-last reader')
+(def reader-next (fn (r)
+  (letv (ahead names h) r
+    (letv (l n2 h2) (raw-line names h)
+      (tuple ahead (is-nil l) (tuple l n2 h2))))))
+
+(def addr-hits (fn (a ps line last)
+  (letv (kind v) a
+    (cond ((= kind "n") (= line v))
+          ((= kind "$") last)
+          (else (not (is-nil (re-match v ps))))))))
+
+; the replacement of s, & and \1..\9 from a match m in ps
+(def replaced (fn (rep ps m)
+  (letv (out i)
+        (iterate (fn (st)
+                   (letv (out i) st
+                     (if (>= i (byte-len rep)) (list)
+                       (let ((c (at rep i)))
+                         (cond ((= c "&") (letv (a b) (nth m 0) (tuple (str-concat out (byte-sub ps a b)) (+ i 1))))
+                               ((and (= c "\\") (>= (byte-find "123456789" (at rep (+ i 1))) 0))
+                                (let ((g (nth m (number (at rep (+ i 1))))))
+                                  (tuple (str-concat out (if (is-nil g) "" (letv (a b) g (byte-sub ps a b)))) (+ i 2))))
+                               ((and (= c "\\") (= (at rep (+ i 1)) "n")) (tuple (str-concat out "\n") (+ i 2)))
+                               ((= c "\\") (tuple (str-concat out (at rep (+ i 1))) (+ i 2)))
+                               (else (tuple (str-concat out c) (+ i 1))))))))
+               (tuple "" 0))
+    out)))
+
+; text built a piece at a time: recent pieces, joined 64 at a time into
+; blocks (one string grown for each piece would copy it all each time)
+(def add (fn (blocks parts piece)
+  (if (>= (length parts) 64) (tuple (list-append blocks (str-join "" parts)) (list piece))
+    (tuple blocks (list-append parts piece)))))
+(def built (fn (blocks parts) (str-join "" (list-append blocks (str-join "" parts)))))
+
+; s over ps: (new-ps substituted). Matches left to right; the which-th is
+; replaced (and every one after it with g); an empty match right where the
+; one before ended is not one (s/a*/x/g on aaa is x).
+(def substitute (fn (ps re rep flags)
+  (letv (g p which w) flags
+    (letv (blocks parts from count prev done)
+          (iterate (fn (st)
+                     (letv (blocks parts from count prev done) st
+                       (if done (list)
+                         (let ((m (if (> from (byte-len ps)) (list) (re-match re ps from))))
+                           (if (is-nil m)
+                             (letv (bl pa) (add blocks parts (byte-sub ps (math-min from (byte-len ps)))) (tuple bl pa from count prev #t))
+                             (letv (a b) (nth m 0)
+                               (let ((empty (= a b)))
+                                 (if (and empty (= a prev))
+                                   ; not a match: the byte there is kept and the search goes on after it
+                                   (if (>= a (byte-len ps))
+                                     (letv (bl pa) (add blocks parts (byte-sub ps from)) (tuple bl pa from count prev #t))
+                                     (letv (bl pa) (add blocks parts (byte-sub ps from (+ a 1))) (tuple bl pa (+ a 1) count prev #f)))
+                                   (let ((k (+ count 1)))
+                                     (let ((keep (byte-sub ps from a))
+                                           (put (if (< k which) (byte-sub ps a b) (replaced rep ps m)))
+                                           (stop (and (>= k which) (not g))))
+                                       (cond (stop (letv (bl pa) (add blocks parts (str-concat keep put (byte-sub ps b))) (tuple bl pa b k b #t)))
+                                             ; after an empty match the next byte goes as it is
+                                             (empty (if (>= b (byte-len ps))
+                                                      (letv (bl pa) (add blocks parts (str-concat keep put)) (tuple bl pa b k b #t))
+                                                      (letv (bl pa) (add blocks parts (str-concat keep put (byte-sub ps b (+ b 1)))) (tuple bl pa (+ b 1) k b #f))))
+                                             (else (letv (bl pa) (add blocks parts (str-concat keep put)) (tuple bl pa b k b #f))))))))))))))
+                 (tuple (list) (list) 0 0 -1 #f))
+      (tuple (built blocks parts) (>= count which))))))
+
+(def escaped (fn (ps)
+  (str-concat
+    (str-join "" (map (fn (b)
+                        (cond ((= b 92) "\\\\") ((= b 7) "\\a") ((= b 8) "\\b") ((= b 12) "\\f") ((= b 10) "\\n")
+                              ((= b 13) "\\r") ((= b 9) "\\t") ((= b 11) "\\v")
+                              ((or (< b 32) (>= b 127)) (str-concat "\\" (let ((t (int-text b 8))) (str-concat (if (< (byte-len t) 3) (if (< (byte-len t) 2) "00" "0") "") t))))
+                              (else (bytes b))))
+                      (byte-list ps)))
+    "$")))
+
+
+(def main (fn ()
+  (letv (opts files bad) (getopt ARGS "nErie:f:")
+    (let ((scripts (all-of opts "e")) (sfiles (all-of opts "f")))
+      (let ((text (if (and (= (length scripts) 0) (= (length sfiles) 0))
+                    (if (> (length files) 0) (nth files 0) "")
+                    (str-join "\n" (list-concat scripts (map (fn (f) (let ((t (read-file f))) (strip t))) sfiles)))))
+            (names (if (and (= (length scripts) 0) (= (length sfiles) 0)) (if (> (length files) 0) (tail files) (list)) files))
+            (ere (or (has opts "E") (has opts "r")))
+            (quiet (has opts "n"))
+            (in-place (has opts "i")))
+        (cond ((not (= bad "")) (do (err-write "sed: bad option -" bad "\n" usage "\n") (exit-status 1)))
+              ((and (= (length files) 0) (= (length scripts) 0) (= (length sfiles) 0)) (do (err-write usage "\n") (exit-status 1)))
+              ((and in-place (= (length names) 0)) (do (err-write "sed: -i needs a file\n") (exit-status 1)))
+              (else
+                (letv (cmds err) (parse text ere)
+                  (if (not (= err "")) (do (err-write "sed: " err "\n") (exit-status 1))
+                    (let ((runs (if in-place (map (fn (n) (list n)) names) (list (if (= (length names) 0) (list "-") names)))))
+                      (let ((st (fold (fn (st group)
+                                        (cond ((and in-place (is-nil (file-stat (nth group 0))))
+                                               (do (fail (nth group 0) "No such file or directory") st))
+                                              ((= (run-files cmds group quiet in-place) 0) st)
+                                              (else 1)))
+                                      0 runs)))
+                        (exit-status (if (> failures 0) 1 st)))))))))))))
+
+; the w files, opened once each (truncated) and kept: (name handle) pairs
+(def w-files (fn (cmds)
+  (let ((ns (fold (fn (acc c) (letv (a1 a2 neg cmd x y z) c
+                                (let ((w (cond ((= cmd "w") x)
+                                               ((= cmd "s") (letv (g p n f) z f))
+                                               (else ""))))
+                                  (if (or (= w "") (> (length (filter (fn (e) (= e w)) acc)) 0)) acc (list-append acc w)))))
+                  (list) cmds)))
+    (map (fn (n) (tuple n (file-open n "w"))) ns))))
+(def w-handle (fn (ws name) (fold (fn (h p) (letv (n x) p (if (= n name) x h))) (list) ws)))
+
+;  set the item k of l to v
+(def set-nth (fn (l k v) (map (fn (i) (if (= i k) v (nth l i))) (range 0 (length l)))))
+
+; one run over a group of files (all of them, or one with -i): 0 or 1.
+; Across cycles: the reader, the hold space, each range's state, the
+; line number, and what a D left to start the next cycle with.
+(def run-files (fn (cmds group quiet in-place)
+  (let ((out (if in-place (file-open (nth group 0) "w") "-")) (ws (w-files cmds)))
+    (let ((emit (fn (s end) (if (= (type-of out) "string") (out-write s end) (file-write out s end)))))
+      (do (iterate
+            (fn (st)
+              (letv (reader hold ranges lineno left done) st
+                (if done (list)
+                  (if (not (is-nil left))
+                    (cycle cmds left #f reader hold ranges lineno quiet emit ws)
+                    (letv (first last r2) (reader-next reader)
+                      (if (is-nil first) (list)
+                        (cycle cmds first last r2 hold ranges (+ lineno 1) quiet emit ws)))))))
+            (tuple (reader-new group) "" (map (fn (c) #f) cmds) 0 (list) #f))
+          (map (fn (p) (letv (n h) p (if (= (type-of h) "string") #f (file-close h)))) ws)
+          (if (= (type-of out) "string") #f (file-close out))
+          0)))))
+
+; one cycle: the script over the pattern space, then the pattern space
+; out: (reader hold ranges lineno left done), left what a D keeps for the
+; next cycle (nil when none)
+(def cycle (fn (cmds line last reader hold ranges lineno quiet emit ws)
+  (letv (pc ps lst rd hd rgs ln sub appended quit deleted restart)
+        (iterate
+          (fn (st)
+            (letv (pc ps lst rd hd rgs ln sub appended quit deleted restart) st
+              (if (or (>= pc (length cmds)) quit deleted restart) (list)
+                (letv (a1 a2 neg c x y z) (nth cmds pc)
+                  ; whether the address holds, and the range state after
+                  (letv (hit rgs2)
+                        (cond ((is-nil a1) (tuple #t rgs))
+                              ((is-nil a2) (tuple (addr-hits a1 ps ln lst) rgs))
+                              ; a range in progress is #t, or the line it ends on (n and +)
+                              ((not (= (type-of (nth rgs pc)) "bool"))
+                               (tuple #t (set-nth rgs pc (if (>= ln (nth rgs pc)) #f (nth rgs pc)))))
+                              ((nth rgs pc)
+                               (tuple #t (set-nth rgs pc (not (addr-hits a2 ps ln lst)))))
+                              ((addr-hits a1 ps ln lst)
+                               (letv (k v) a2
+                                 (let ((end (cond ((= k "n") v) ((= k "+") (+ ln v)) (else -1))))
+                                   (tuple #t (set-nth rgs pc (cond ((= end -1) #t) ((<= end ln) #f) (else end)))))))
+                              (else (tuple #f rgs)))
+                    (let ((go (not (= hit neg))) (next (+ pc 1))
+                          (same (fn (to p2 h2) (tuple to p2 lst rd h2 rgs2 ln sub appended quit deleted restart))))
+                      (cond ((not go) (same (if (= c "{") x next) ps hd))
+                            ((or (= c "{") (= c "}") (= c ":")) (same next ps hd))
+                            ((= c "s")
+                             (letv (np did) (substitute ps x y z)
+                               (letv (g p n w) z
+                                 (do (if (and did p) (emit np "\n") #f)
+                                     (if (and did (not (= w ""))) (file-write (w-handle ws w) np "\n") #f)
+                                     (tuple next np lst rd hd rgs2 ln (or sub did) appended quit deleted restart)))))
+                            ((= c "y")
+                             (same next (y-apply ps x) hd))
+                            ((= c "a") (tuple next ps lst rd hd rgs2 ln sub (str-concat appended x "\n") quit deleted restart))
+                            ((= c "i") (do (emit x "\n") (same next ps hd)))
+                            ((= c "c")
+                             (do (if (or (is-nil a2) (let ((r (nth rgs2 pc))) (and (= (type-of r) "bool") (not r)))) (emit x "\n") #f)
+                                 (tuple next ps lst rd hd rgs2 ln sub appended quit #t restart)))
+                            ((= c "d") (tuple next ps lst rd hd rgs2 ln sub appended quit #t restart))
+                            ((= c "D")
+                             (let ((nl (byte-find ps "\n")))
+                               (if (< nl 0) (tuple next ps lst rd hd rgs2 ln sub appended quit #t restart)
+                                 (tuple next (byte-sub ps (+ nl 1)) lst rd hd rgs2 ln sub appended quit #f #t))))
+                            ((= c "g") (same next hd hd))
+                            ((= c "G") (same next (str-concat ps "\n" hd) hd))
+                            ((= c "h") (same next ps ps))
+                            ((= c "H") (same next ps (str-concat hd "\n" ps)))
+                            ((= c "x") (same next hd ps))
+                            ((= c "l") (do (emit (escaped ps) "\n") (same next ps hd)))
+                            ((= c "p") (do (emit ps "\n") (same next ps hd)))
+                            ((= c "P") (let ((nl (byte-find ps "\n"))) (do (emit (if (< nl 0) ps (byte-sub ps 0 nl)) "\n") (same next ps hd))))
+                            ((= c "=") (do (emit (int-text ln) "\n") (same next ps hd)))
+                            ((= c "q") (tuple next ps lst rd hd rgs2 ln sub appended #t deleted restart))
+                            ((= c "r")
+                             (let ((t (if (is-nil (file-stat x)) "" (read-file x))))
+                               (tuple next ps lst rd hd rgs2 ln sub (str-concat appended t) quit deleted restart)))
+                            ((= c "w") (do (file-write (w-handle ws x) ps "\n") (same next ps hd)))
+                            ((or (= c "b") (and (= c "t") sub))
+                             (tuple (if (= x "") (length cmds) (label-at cmds x)) ps lst rd hd rgs2 ln (if (= c "t") #f sub) appended quit deleted restart))
+                            ((= c "t") (same next ps hd))
+                            ((or (= c "n") (= c "N"))
+                             (letv (l2 last2 rd2) (reader-next rd)
+                               (cond ((and (is-nil l2) (= c "n")) ; the end: the script ends, the space printed
+                                      (tuple (length cmds) ps lst rd hd rgs2 ln sub appended #t deleted restart))
+                                     ((is-nil l2) ; N at the end quits, nothing more printed (POSIX)
+                                      (tuple (length cmds) ps lst rd hd rgs2 ln sub appended #t #t restart))
+                                     ((= c "n")
+                                      (do (if quiet #f (emit ps "\n"))
+                                          (emit appended "")
+                                          (tuple next l2 last2 rd2 hd rgs2 (+ ln 1) sub "" quit deleted restart)))
+                                     (else (tuple next (str-concat ps "\n" l2) last2 rd2 hd rgs2 (+ ln 1) sub appended quit deleted restart)))))
+                            (else (same next ps hd)))))))))
+          (tuple 0 line last reader hold ranges lineno #f "" #f #f #f))
+    ; D starting the next cycle prints nothing; the rest of the space goes on
+    (do (if (or deleted quiet restart) #f (emit ps "\n"))
+        (emit appended "")
+        (tuple rd hd rgs ln (if restart ps (list)) quit)))))
+
+(main)

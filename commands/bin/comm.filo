@@ -1,0 +1,32 @@
+; comm [-123] file1 file2: two sorted files line by line, in three
+; columns: lines only in file1, only in file2 (after a tab), in both (after
+; two); -1, -2 and -3 leave a column out, and the tabs before the others go
+; with it. Lines compare byte by byte (LC_ALL=C); - is the input.
+
+(def usage "usage: comm [-123] file1 file2")
+(def has (fn (opts letter) (> (length (filter (fn (o) (letv (l val) o (= l letter))) opts)) 0)))
+(def is-stdin (fn (src) (and (= (type-of src) "string") (= src "-"))))
+(def next-line (fn (src) (if (is-stdin src) (in-line) (file-line src))))
+(def strip (fn (l) (if (and (> (byte-len l) 0) (= (byte-at l (- (byte-len l) 1)) 10)) (byte-sub l 0 (- (byte-len l) 1)) l)))
+(def opened (fn (name) (if (= name "-") "-" (file-open name))))
+
+(letv (opts files bad) (getopt ARGS "123")
+  (let ((show1 (not (has opts "1"))) (show2 (not (has opts "2"))) (show3 (not (has opts "3"))))
+    (cond ((not (= bad "")) (do (err-write "comm: bad option -" bad "\n" usage "\n") (exit-status 1)))
+          ((not (= (length files) 2)) (do (err-write usage "\n") (exit-status 1)))
+          (else
+            (let ((a (opened (nth files 0))) (b (opened (nth files 1))))
+              (cond ((and (= (type-of a) "string") (not (is-stdin a))) (do (err-write "comm: " (nth files 0) ": " a "\n") (exit-status 1)))
+                    ((and (= (type-of b) "string") (not (is-stdin b))) (do (err-write "comm: " (nth files 1) ": " b "\n") (exit-status 1)))
+                    (else
+                      (let ((pre2 (if show1 "\t" "")) (pre3 (str-concat (if show1 "\t" "") (if show2 "\t" ""))))
+                        ; the state: the line waiting from each file, nil once it is done
+                        (iterate (fn (st)
+                                   (letv (x y) st
+                                     (cond ((and (is-nil x) (is-nil y)) (list))
+                                           ((or (is-nil y) (and (not (is-nil x)) (< (byte-cmp (strip x) (strip y)) 0)))
+                                            (do (if show1 (out-write (strip x) "\n") #f) (tuple (next-line a) y)))
+                                           ((or (is-nil x) (> (byte-cmp (strip x) (strip y)) 0))
+                                            (do (if show2 (out-write pre2 (strip y) "\n") #f) (tuple x (next-line b))))
+                                           (else (do (if show3 (out-write pre3 (strip x) "\n") #f) (tuple (next-line a) (next-line b)))))))
+                                 (tuple (next-line a) (next-line b)))))))))))

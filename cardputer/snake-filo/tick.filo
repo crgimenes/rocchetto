@@ -1,0 +1,10 @@
+; The snake moves when enough time has piled up; a backlog is dropped.
+(if (and started (not (or over cramped)))
+  (do
+    (set waited (+ waited MS))
+    (if (>= waited STEP_MS)
+      (do
+        (set waited (- waited STEP_MS))
+        (if (> waited STEP_MS) (set waited 0))
+        (set dir want)
+        (step)))))

@@ -1,0 +1,5 @@
+(title "rocchetto")
+(map
+  (fn (i) (letv (code key label target) (nth items i) (key-label (+ 2 i) 2 key label)))
+  (range (length items)))
+(hint-bar "press a letter")

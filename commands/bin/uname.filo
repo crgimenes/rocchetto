@@ -1,0 +1,21 @@
+; uname [-asnrvm]: what system this is. -s the system (rocchetto, the default),
+; -n this machine's name, -r and -v the release, -m the hardware, -a all of
+; them in that order.
+
+(def usage "usage: uname [-asnrvm]")
+(def fields (list (tuple "s" "rocchetto") (tuple "n" HOSTNAME) (tuple "r" VERSION) (tuple "v" VERSION)
+                  (tuple "m" MACHINE)))
+(def flag (fn (a) (and (>= (byte-len a) 2) (= (byte-sub a 0 1) "-")
+                       (= (length (filter (fn (i) (< (byte-find "asnrvm" (byte-sub a i (+ i 1))) 0))
+                                          (range 1 (byte-len a))))
+                          0))))
+
+(def main (fn ()
+  (if (> (length (filter (fn (a) (not (flag a))) ARGS)) 0) (do (err-write usage "\n") (exit-status 2))
+    (let ((given (str-join "" (map (fn (a) (byte-sub a 1)) ARGS))))
+      (let ((chosen (cond ((= given "") "s") ((>= (byte-find given "a") 0) "snrvm") (else given))))
+        (out-write (str-join " " (map (fn (f) (letv (l v) f v))
+                                      (filter (fn (f) (letv (l v) f (>= (byte-find chosen l) 0))) fields)))
+                   "\n"))))))
+
+(main)

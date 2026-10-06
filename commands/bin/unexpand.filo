@@ -1,0 +1,87 @@
+; unexpand [-a | -t tablist] [file...]: runs of blanks as tabs where they
+; reach a tab stop (every 8 columns, or as -t says, which implies -a): the
+; ones that begin a line, or with -a every run. A lone space reaching a stop
+; stays a space; what a run has past its last stop stays spaces.
+
+(def usage "usage: unexpand [-a | -t tablist] [file...]")
+
+(def opt (fn (opts letter default)
+  (fold (fn (v o) (letv (l val) o (if (= l letter) val v))) default opts)))
+(def has (fn (opts letter) (> (length (filter (fn (o) (letv (l val) o (= l letter))) opts)) 0)))
+
+(def not-digit (re-compile "[^0-9]"))
+(def stops-of (fn (t)
+  (let ((parts (filter (fn (p) (> (byte-len p) 0)) (str-split " " (str-replace "," " " t)))))
+    (cond ((= (length (filter (fn (p) (not (is-nil (re-match not-digit p)))) parts)) 0)
+           (if (= (length parts) 1) (tuple (number (nth parts 0)) (list))
+             (tuple 0 (map number parts))))
+          (else (tuple -1 (list)))))))
+
+(def next-stop (fn (stops col)
+  (letv (every l) stops
+    (if (> every 0) (* every (+ (floor (/ col every)) 1))
+      (fold (fn (found s) (if (and (< found 0) (> s col)) s found)) -1 l)))))
+
+(def spaces (fn (n) (str-join "" (map (fn (i) " ") (range 0 n)))))
+
+; a run of blanks from column from to column to, a tab among them or not:
+; a tab for each stop it reaches (a lone space reaching one stays), spaces
+; after the last
+(def run-text (fn (stops from to had-tab)
+  (letv (pos out)
+        (iterate (fn (st)
+                   (letv (pos out) st
+                     (let ((s (next-stop stops pos)))
+                       (if (or (< s 0) (> s to) (= pos to)) (list)
+                         (tuple s (str-concat out (if (or (> (- s pos) 1) had-tab) "\t" " ")))))))
+                 (tuple from ""))
+    (str-concat out (spaces (- to pos))))))
+
+; where a window of text from at ends: about 4 KB, never inside a character
+(def window (fn (text at)
+  (iterate (fn (e) (if (or (>= e (byte-len text)) (<= e (+ at 1)) (not (= (u32-and (byte-at text e) 192) 128))) (list) (- e 1)))
+           (math-min (byte-len text) (+ at 4096)))))
+
+; a line written as it goes, a window of it decoded at a time: (col
+; run-from run-tab in-run leading), a run of blanks held until it ends
+(def unexpand-line (fn (l stops all)
+  (let ((step (fn (st cp)
+                (letv (col from tab in-run leading) st
+                  (if (and (or (= cp 32) (= cp 9)) (or all leading))
+                    (tuple (if (= cp 9) (let ((s (next-stop stops col))) (if (< s 0) (+ col 1) s)) (+ col 1))
+                           (if in-run from col) (or tab (= cp 9)) #t leading)
+                    (do (if in-run (out-write (run-text stops from col tab)) #f)
+                        (cond ((= cp 10) (do (out-write "\n") (tuple 0 0 #f #f #t)))
+                              ((= cp 8) (do (out-write (utf8-encode cp)) (tuple (math-max 0 (- col 1)) 0 #f #f #f)))
+                              ((= cp 9) (do (out-write "\t")
+                                            (tuple (let ((s (next-stop stops col))) (if (< s 0) (+ col 1) s)) 0 #f #f #f)))
+                              (else (do (out-write (utf8-encode cp)) (tuple (+ col (rune-width cp)) 0 #f #f #f))))))))))
+    (letv (at col from tab in-run leading)
+          (iterate (fn (st)
+                     (letv (at col from tab in-run leading) st
+                       (if (>= at (byte-len l)) (list)
+                         (let ((e (window l at)))
+                           (letv (c2 f2 t2 r2 l2) (fold step (tuple col from tab in-run leading) (utf8-runes (byte-sub l at e)))
+                             (tuple e c2 f2 t2 r2 l2))))))
+                   (tuple 0 0 0 #f #f #t))
+      (if in-run (out-write (run-text stops from col tab)) #f)))))
+
+(def unexpand-source (fn (next stops all)
+  (iterate (fn (go) (let ((l (next))) (if (is-nil l) (list) (do (unexpand-line l stops all) #t)))) #t)))
+
+(letv (opts files bad) (getopt ARGS "at:")
+  (let ((t (opt opts "t" "")))
+    (let ((stops (stops-of (if (= t "") "8" t))) (all (or (has opts "a") (not (= t "")))))
+      (letv (every l) stops
+        (cond ((not (= bad "")) (do (err-write "unexpand: bad option -" bad "\n" usage "\n") (exit-status 1)))
+              ((or (< every 0) (and (= every 0) (= (length l) 0)))
+               (do (err-write "unexpand: the tab list is a number, or positions in ascending order\n") (exit-status 1)))
+              ((= (length files) 0) (unexpand-source (fn () (in-line)) stops all))
+              (else
+                (exit-status
+                  (fold (fn (worst name)
+                          (if (= name "-") (do (unexpand-source (fn () (in-line)) stops all) worst)
+                            (let ((h (file-open name)))
+                              (if (= (type-of h) "string") (do (err-write "unexpand: " name ": " h "\n") 1)
+                                (do (unexpand-source (fn () (file-line h)) stops all) (file-close h) worst)))))
+                        0 files))))))))

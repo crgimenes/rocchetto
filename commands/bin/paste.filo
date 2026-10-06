@@ -1,0 +1,74 @@
+; paste [-s] [-d list] file...: the files' lines side by side, joined by
+; a tab (or the list's characters, used in turn; \n \t \\ and \0, empty,
+; as POSIX writes them); -s each file's lines on one line. - is the input.
+
+(def usage "usage: paste [-s] [-d list] file...")
+
+(def starts (fn (s p) (and (>= (byte-len s) (byte-len p)) (= (byte-sub s 0 (byte-len p)) p))))
+
+; the delimiter list as its characters, its escapes read
+(def delims (fn (s)
+  (letv (out esc)
+        (fold (fn (st c)
+                (letv (acc esc) st
+                  (cond (esc (tuple (list-append acc (cond ((= c "n") "\n") ((= c "t") "\t") ((= c "0") "") (else c))) #f))
+                        ((= c "\\") (tuple acc #t))
+                        (else (tuple (list-append acc c) #f)))))
+              (tuple (list) #f) (map (fn (cp) (utf8-encode cp)) (utf8-runes s)))
+    (if (= (length out) 0) (list "") out))))
+
+; options, then the files: (files serial list how bad), how "" or "done"
+; when the files begin, "bad" with the option at fault
+(def parse (fn (args)
+  (iterate (fn (st)
+             (letv (rest serial dl how bad) st
+               (if (or (not (= how "")) (= (length rest) 0)) (list)
+                 (let ((a (nth rest 0)))
+                   (cond ((= a "--") (tuple (tail rest) serial dl "done" bad))
+                         ((= a "-s") (tuple (tail rest) #t dl how bad))
+                         ((= a "-d") (if (< (length rest) 2) (tuple (list) serial dl "bad" a)
+                                       (tuple (tail (tail rest)) serial (nth rest 1) how bad)))
+                         ((starts a "-d") (tuple (tail rest) serial (byte-sub a 2) how bad))
+                         ((and (starts a "-") (not (= a "-"))) (tuple (list) serial dl "bad" a))
+                         (else (list)))))))
+           (tuple args #f "\t" "" ""))))
+
+(def strip (fn (l) (if (and (> (byte-len l) 0) (= (byte-at l (- (byte-len l) 1)) 10)) (byte-sub l 0 (- (byte-len l) 1)) l)))
+(def is-stdin (fn (src) (and (= (type-of src) "string") (= src "-"))))
+(def next-line (fn (src) (if (is-stdin src) (in-line) (file-line src))))
+(def ds-at (fn (ds i) (nth ds (- i (* (length ds) (floor (/ i (length ds))))))))
+
+(def join (fn (pieces ds)
+  (letv (acc i) (fold (fn (st p) (letv (acc i) st (tuple (if (= i 0) p (str-concat acc (ds-at ds (- i 1)) p)) (+ i 1))))
+                      (tuple "" 0) pieces)
+    acc)))
+
+(def side-by-side (fn (srcs ds)
+  (iterate (fn (go)
+             (let ((lines (map next-line srcs)))
+               (if (= (length (filter (fn (l) (not (is-nil l))) lines)) 0) (list)
+                 (do (out-write (join (map (fn (l) (if (is-nil l) "" (strip l))) lines) ds) "\n") #t))))
+           #t)))
+
+; one file on one line, a piece at a time: the delimiter before each but the first
+(def serial (fn (src ds)
+  (do (iterate (fn (i)
+                 (let ((l (next-line src)))
+                   (if (is-nil l) (list)
+                     (do (out-write (if (= i 0) "" (ds-at ds (- i 1))) (strip l)) (+ i 1)))))
+               0)
+      (out-write "\n"))))
+
+(def opened (fn (name) (if (= name "-") "-" (file-open name))))
+(def failed (fn (src) (and (= (type-of src) "string") (not (is-stdin src)))))
+
+(letv (files is-serial dl how bad) (parse ARGS)
+  (cond ((= how "bad") (do (err-write "paste: bad option " bad "\n" usage "\n") (exit-status 1)))
+        ((= (length files) 0) (do (err-write usage "\n") (exit-status 1)))
+        (else
+          (let ((srcs (map opened files)) (ds (delims dl)))
+            (if (> (length (filter failed srcs)) 0)
+              (do (map (fn (i) (if (failed (nth srcs i)) (err-write "paste: " (nth files i) ": " (nth srcs i) "\n") #f))
+                       (range 0 (length files)))
+                  (exit-status 1))
+              (if is-serial (map (fn (s) (serial s ds)) srcs) (side-by-side srcs ds)))))))

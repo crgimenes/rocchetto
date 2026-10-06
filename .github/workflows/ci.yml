@@ -1,0 +1,77 @@
+name: test
+
+on: [push, pull_request, workflow_dispatch]
+
+permissions:
+  contents: read
+
+jobs:
+  # The shell under ASan/UBSan, on both hosts. Filo, filo-term, Core War and
+  # edt are sibling checkouts, as on a developer's disk.
+  test:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
+    env:
+      CC: clang
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: rocchetto
+      - uses: actions/checkout@v4
+        with:
+          repository: crgimenes/clang_filo
+          path: clang_filo
+      - uses: actions/checkout@v4
+        with:
+          repository: crgimenes/filo-term
+          path: filo-term
+      - uses: actions/checkout@v4
+        with:
+          repository: crgimenes/corewar
+          path: corewar
+      - uses: actions/checkout@v4
+        with:
+          repository: crgimenes/edt
+          path: edt
+      - run: make -C rocchetto rocchetto compose small test
+
+  # The browser's build under Node, and the lint, with LLVM's own tools.
+  wasm-lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: rocchetto
+      - uses: actions/checkout@v4
+        with:
+          repository: crgimenes/clang_filo
+          path: clang_filo
+      - uses: actions/checkout@v4
+        with:
+          repository: crgimenes/filo-term
+          path: filo-term
+      - uses: actions/checkout@v4
+        with:
+          repository: crgimenes/corewar
+          path: corewar
+      - uses: actions/checkout@v4
+        with:
+          repository: crgimenes/edt
+          path: edt
+      - name: Install tools
+        run: |
+          wget -qO llvm.sh https://apt.llvm.org/llvm.sh
+          sudo bash llvm.sh 23
+          sudo apt-get install -y clang-format-23 clang-tidy-23 lld-23 binaryen cppcheck
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: |
+          make -C rocchetto wasm-test fmt-check tidy check CC=clang-23 CLANG=clang-23 \
+            LLD=/usr/lib/llvm-23/bin CLANG_FORMAT=clang-format-23 CLANG_TIDY=clang-tidy-23

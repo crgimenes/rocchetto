@@ -1,0 +1,92 @@
+; grep [-E | -F] [-c | -l | -q] [-hHinsvx] (-e pattern... | -f file... | pattern) [file...]:
+; the lines of each file (or of the input, - or none) a pattern matches:
+; a BRE, an ERE with -E, plain text with -F; several with -e, a newline in
+; one, or a file of them (-f). -i any case, -v the lines none matches, -x
+; only a whole line, -n with line numbers, -c how many, -l the files with
+; one, -q nothing (the status says), -s no word of files that cannot be
+; read, -h without file names, -H with them. Status: 0 some line, 1 none,
+; 2 an error (a match with -q still 0).
+
+(def usage "usage: grep [-E | -F] [-c | -l | -q] [-hHinsvx] (-e pattern... | -f file... | pattern) [file...]")
+(def has (fn (opts letter) (> (length (filter (fn (o) (letv (l val) o (= l letter))) opts)) 0)))
+(def all-of (fn (opts letter) (map (fn (o) (letv (l val) o val)) (filter (fn (o) (letv (l val) o (= l letter))) opts))))
+(def is-stdin (fn (src) (and (= (type-of src) "string") (= src "-"))))
+(def opened (fn (name) (if (= name "-") "-" (file-open name))))
+(def next-line (fn (src) (if (is-stdin src) (in-line) (file-line src))))
+(def strip (fn (l) (if (and (> (byte-len l) 0) (= (byte-at l (- (byte-len l) 1)) 10)) (byte-sub l 0 (- (byte-len l) 1)) l)))
+(def label (fn (name) (if (= name "-") "(standard input)" name)))
+
+; the patterns of a -f file, a line each; nil (said) when it cannot be read
+(def pattern-file (fn (name)
+  (let ((h (opened name)))
+    (if (and (= (type-of h) "string") (not (is-stdin h)))
+      (do (err-write "grep: " name ": " h "\n") (list))
+      (iterate (fn (acc) (let ((l (next-line h))) (if (is-nil l) (list) (list-append acc (strip l))))) (list))))))
+
+; a matcher: (kind thing) with kind "re" (a compiled regex) or "text"
+(def matcher (fn (p fixed ere icase)
+  (if fixed (tuple "text" (if icase (str-lower p) p))
+    (let ((re (re-compile p (str-concat (if ere "E" "") (if icase "i" "")))))
+      (if (= (type-of re) "string") (tuple "bad" re) (tuple "re" re))))))
+
+(def hits (fn (m line whole icase)
+  (letv (kind thing) m
+    (if (= kind "text")
+      (let ((l (if icase (str-lower line) line)))
+        (if whole (= l thing) (>= (byte-find l thing) 0)))
+      (let ((r (re-match thing line)))
+        (and (not (is-nil r))
+             (or (not whole) (letv (s e) (nth r 0) (and (= s 0) (= e (byte-len line)))))))))))
+
+; one source: (selected stop) — stop when -q or -l has its answer
+(def scan (fn (src name ms cfg)
+  (letv (invert whole icase numbers count names quiet list-only) cfg
+    (letv (n found stop)
+          (iterate (fn (st)
+                     (letv (n found stop) st
+                       (if stop (list)
+                         (let ((l (next-line src)))
+                           (if (is-nil l) (list)
+                             (let ((line (strip l)))
+                               (if (= (> (length (filter (fn (m) (hits m line whole icase)) ms)) 0) invert)
+                                 (tuple (+ n 1) found #f)
+                                 (do (if (or count quiet list-only) #f
+                                       (out-write (if names (str-concat (label name) ":") "")
+                                                  (if numbers (str-concat (int-text (+ n 1)) ":") "")
+                                                  line "\n"))
+                                     (tuple (+ n 1) (+ found 1) (or quiet list-only))))))))))
+                   (tuple 0 0 #f))
+      (do (if count (out-write (if names (str-concat (label name) ":") "") (int-text found) "\n") #f)
+          (if (and list-only (> found 0)) (out-write (label name) "\n") #f)
+          found)))))
+
+(letv (opts rest bad) (getopt ARGS "EFGce:f:hHilnqsvx")
+  (let ((given (list-concat (all-of opts "e") (fold (fn (acc f) (list-concat acc (pattern-file f))) (list) (all-of opts "f"))))
+        (from-args (= (length (filter (fn (o) (letv (l v) o (or (= l "e") (= l "f")))) opts)) 0)))
+    (let ((patterns (fold (fn (acc p) (list-concat acc (str-split "\n" p))) (list)
+                          (if from-args (if (> (length rest) 0) (list (nth rest 0)) (list)) given)))
+          (files (if from-args (if (> (length rest) 0) (tail rest) (list)) rest))
+          (fixed (and (has opts "F") (not (has opts "E")))) (ere (has opts "E")) (icase (has opts "i")))
+      (cond ((not (= bad "")) (do (err-write "grep: bad option -" bad "\n" usage "\n") (exit-status 2)))
+            ((and from-args (= (length rest) 0)) (do (err-write usage "\n") (exit-status 2)))
+            (else
+              (let ((ms (map (fn (p) (matcher p fixed ere icase)) patterns)))
+                (let ((wrong (filter (fn (m) (letv (k t) m (= k "bad"))) ms)))
+                  (if (> (length wrong) 0)
+                    (letv (k why) (nth wrong 0) (do (err-write "grep: " why "\n") (exit-status 2)))
+                    (let ((names (if (has opts "h") #f (or (has opts "H") (> (length files) 1))))
+                          (quiet (has opts "q")) (silent (has opts "s")))
+                      (let ((cfg (tuple (has opts "v") (has opts "x") icase (has opts "n") (has opts "c") names quiet (has opts "l"))))
+                        ; (found errors stopped)
+                        (letv (found errors stopped)
+                              (fold (fn (acc name)
+                                      (letv (found errors stopped) acc
+                                        (if stopped acc
+                                          (let ((src (opened name)))
+                                            (if (and (= (type-of src) "string") (not (is-stdin src)))
+                                              (do (if silent #f (err-write "grep: " name ": " src "\n")) (tuple found 1 stopped))
+                                              (let ((k (scan src name ms cfg)))
+                                                (do (if (is-stdin src) #f (file-close src))
+                                                    (tuple (+ found k) errors (and quiet (> k 0))))))))))
+                                    (tuple 0 0 #f) (if (= (length files) 0) (list "-") files))
+                          (exit-status (cond ((and quiet (> found 0)) 0) ((> errors 0) 2) ((> found 0) 0) (else 1))))))))))))))

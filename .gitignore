@@ -1,0 +1,5 @@
+rocchetto
+compose
+build/
+web/node_modules/
+host/esp32/src/

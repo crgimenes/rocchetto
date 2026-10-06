@@ -1,0 +1,3 @@
+; hostname: this machine's name, as the host says (the prompt's @ part).
+(if (= HOSTNAME "") (do (err-write "hostname: this machine has no name\n") (exit-status 1))
+  (out-write HOSTNAME "\n"))

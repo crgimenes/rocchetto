@@ -1,0 +1,273 @@
+; ls [-1ACFRSadfghklmoprstx] [file...]: the files named, and what each
+; directory named holds, as POSIX's ls (here when nothing is named).
+; Columns (-C down, -x across) when out goes to the terminal, one name a
+; line (-1) when it does not; -m names with commas; -l a long row each (-g
+; without the owner, -o without the group, -h sizes in K, M, G). -a dot
+; files and . and .., -A dot files; -d a directory as itself; -R the
+; directories inside too; -F marks / a directory, * what runs, @ a link;
+; -p marks / a directory; -s the size in blocks of 512 bytes (-k: 1024);
+; -t newest first, -S largest first, -r the other way round, -f as they
+; come (and -a). The width is COLUMNS when it is a number, the terminal's
+; when not. No store here keeps modes or owners: -l shows what holds, w
+; where the file can be written (the home), x on a directory and on what
+; the shell runs, the user as owner in the home and "tree" or "site"
+; elsewhere. Status 1 when a name is not there.
+
+(def usage "usage: ls [-1ACFRSadfghklmoprstx] [file ...]")
+(def known "1ACFRSadfghklmoprstx")
+(def digits (re-compile "^[0-9][0-9]*$"))
+(def has (fn (s c) (>= (byte-find s c) 0)))
+(def letters (fn (s) (map (fn (i) (byte-sub s i (+ i 1))) (range 0 (byte-len s)))))
+
+; the letters of the options, and the names after them
+(def read-args (fn (args)
+  (letv (fl rest done)
+        (iterate (fn (st)
+                   (letv (fl rest done) st
+                     (let ((a (if (= (length rest) 0) "" (nth rest 0))))
+                       (cond (done (list))
+                             ((= a "--") (tuple fl (tail rest) #t))
+                             ((and (> (byte-len a) 1) (= (byte-sub a 0 1) "-"))
+                              (tuple (str-concat fl (byte-sub a 1)) (tail rest) #f))
+                             (else (list))))))
+                 (tuple "" args #f))
+    (tuple fl rest))))
+
+(def given (read-args ARGS))
+(def FL (letv (fl rest) given fl))
+(def NAMES (letv (fl rest) given rest))
+(def BAD (filter (fn (c) (not (has known c))) (letters FL)))
+(def TERM (out-terminal))
+(def WIDTH (let ((e (env-get "COLUMNS")))
+             (cond ((and (not (is-nil e)) (not (is-nil (re-match digits e))) (> (number e) 0)) (number e))
+                   ((is-nil TERM) 80)
+                   (else (letv (c r) TERM c)))))
+; of -C -x -1 -m -l -g -o, the last one given says how
+(def LAST (fold (fn (f c) (if (has "Cx1mlgo" c) c f)) "" (letters FL)))
+(def FMT (cond ((= LAST "") (if (is-nil TERM) "1" "C"))
+               ((has "lgo" LAST) "l")
+               (else LAST)))
+(def LONG (= FMT "l"))
+(def UNSORTED (has FL "f"))
+(def ALL (or (has FL "a") UNSORTED))
+(def ALMOST (has FL "A"))
+(def MARK (cond ((has FL "F") "F") ((has FL "p") "p") (else "")))
+(def BLOCKS (has FL "s"))
+(def UNIT (if (has FL "k") 1024 512))
+(def STAT (or LONG BLOCKS (has FL "t") (has FL "S")))
+(def RUNS (or LONG (= MARK "F")))
+(def NOW (now))
+(def TZ (let ((z (time-zone))) (if (is-nil z) 0 z)))
+
+(def spaces (fn (k) (str-join "" (map (fn (i) " ") (range 0 (math-max 0 k))))))
+(def lpad (fn (s w) (str-concat (spaces (- w (str-width s))) s)))
+(def rpad (fn (s w) (str-concat s (spaces (- w (str-width s))))))
+(def widest (fn (ss) (fold (fn (w s) (math-max w (str-width s))) 0 ss)))
+(def join (fn (dir name)
+  (if (and (> (byte-len dir) 0) (= (byte-at dir (- (byte-len dir) 1)) 47)) (str-concat dir name) (str-concat dir "/" name))))
+
+; an entry: (name path kind size mtime from runs), size 0 and mtime nil
+; where nothing tells them
+(def entry (fn (name path kind)
+  (let ((s (if (or STAT RUNS) (file-stat path) (list))))
+    (letv (k z t o) (if (is-nil s) (tuple kind 0 (list) "site") s)
+      (tuple name path k (if (is-nil z) 0 z) t o
+             (if (and RUNS (= k "file")) (file-runs path) (list)))))))
+(def e-name (fn (e) (letv (n p k z t o x) e n)))
+(def e-path (fn (e) (letv (n p k z t o x) e p)))
+(def e-kind (fn (e) (letv (n p k z t o x) e k)))
+(def e-size (fn (e) (letv (n p k z t o x) e z)))
+(def e-time (fn (e) (letv (n p k z t o x) e (if (is-nil t) 0 t))))
+(def e-from (fn (e) (letv (n p k z t o x) e o)))
+(def e-runs (fn (e) (letv (n p k z t o x) e (not (is-nil x)))))
+
+(def by-name (fn (a b) (byte-cmp (e-name a) (e-name b))))
+(def by-key (fn (key)
+  (fn (a b) (let ((d (- (key b) (key a)))) (if (= d 0) (by-name a b) d)))))
+(def CMP (cond ((has FL "S") (by-key e-size)) ((has FL "t") (by-key e-time)) (else by-name)))
+(def order (fn (es)
+  (if UNSORTED es
+    (let ((s (list-sort es CMP))) (if (has FL "r") (reverse s) s)))))
+
+(def blocks (fn (e) (if (= (e-kind e) "file") (floor (/ (+ (e-size e) (- UNIT 1)) UNIT)) 0)))
+(def mark (fn (e)
+  (let ((k (e-kind e)))
+    (cond ((= MARK "") "")
+          ((= k "dir") "/")
+          ((= MARK "p") "")
+          ((= k "link") "@")
+          ((e-runs e) "*")
+          (else "")))))
+
+; ---- the long row ----
+
+(def months (list "Jan" "Feb" "Mar" "Apr" "May" "Jun" "Jul" "Aug" "Sep" "Oct" "Nov" "Dec"))
+; days since 1970-01-01 as (year month day): Howard Hinnant's civil_from_days
+(def civil (fn (days)
+  (let ((z (+ days 719468))
+        (era (floor (/ z 146097)))
+        (doe (- z (* era 146097)))
+        (yoe (floor (/ (- (+ (- doe (floor (/ doe 1460))) (floor (/ doe 36524))) (floor (/ doe 146096))) 365)))
+        (doy (- doe (- (+ (* 365 yoe) (floor (/ yoe 4))) (floor (/ yoe 100)))))
+        (mp (floor (/ (+ (* 5 doy) 2) 153)))
+        (d (+ (- doy (floor (/ (+ (* 153 mp) 2) 5))) 1))
+        (mo (if (< mp 10) (+ mp 3) (- mp 9))))
+    (tuple (+ yoe (* era 400) (if (<= mo 2) 1 0)) mo d))))
+(def two (fn (n c) (if (< n 10) (str-concat c (int-text n)) (int-text n))))
+; "Oct  5 16:40", or "Oct  5  2025" more than half a year away from now
+(def half-year 15778476)
+(def stamp (fn (t)
+  (if (is-nil t) (lpad "-" 12)
+    (let ((local (+ t (* TZ 60)))
+          (days (floor (/ local 86400)))
+          (in-day (- local (* days 86400)))
+          (recent (and (not (is-nil NOW)) (<= t (+ NOW 60)) (< (- NOW t) half-year))))
+      (letv (y mo d) (civil days)
+        (str-concat (nth months (- mo 1)) " " (two d " ") " "
+                    (if recent (str-concat (two (floor (/ in-day 3600)) "0") ":" (two (% (floor (/ in-day 60)) 60) "0"))
+                      (lpad (int-text y) 5))))))))
+(def human (fn (z)
+  (let ((k (cond ((< z 1024) 0) ((< z 1048576) 1) ((< z 1073741824) 2) (else 3))))
+    (if (= k 0) (int-text z)
+      (let ((x (/ z (nth (list 1 1024 1048576 1073741824) k)))
+            (u (nth (list "" "K" "M" "G") k)))
+        (if (< x 10)
+          (let ((t (ceil (* x 10)))) (str-concat (int-text (floor (/ t 10))) "." (int-text (% t 10)) u))
+          (str-concat (int-text (ceil x)) u)))))))
+(def mode (fn (e)
+  (let ((k (e-kind e))
+        (x (if (or (= k "dir") (= k "link") (e-runs e)) "x" "-"))
+        (w (if (or (= k "link") (= (e-from e) "home")) "w" "-")))
+    (str-concat (cond ((= k "dir") "d") ((= k "link") "l") (else "-"))
+                "r" w x "r-" x "r-" x))))
+(def owner (fn (e) (if (= (e-from e) "home") USER (e-from e))))
+(def size-text (fn (e) (if (has FL "h") (human (e-size e)) (int-text (e-size e)))))
+
+(def long-rows (fn (es)
+  (let ((owners (map owner es))
+        (sizes (map size-text es))
+        (bs (map (fn (e) (int-text (blocks e))) es))
+        (ow (widest owners))
+        (sw (widest sizes))
+        (bw (widest bs)))
+    (map (fn (i)
+           (let ((e (nth es i)) (o (nth owners i)))
+             (str-concat (if BLOCKS (str-concat (lpad (nth bs i) bw) " ") "")
+                         (mode e) " 1 "
+                         (if (has FL "g") "" (str-concat (rpad o ow) "  "))
+                         (if (has FL "o") "" (str-concat (rpad o ow) "  "))
+                         (lpad (nth sizes i) sw) " " (stamp (letv (n p k z t f x) e t)) " "
+                         (e-name e) (mark e))))
+         (range 0 (length es))))))
+
+; ---- the short forms ----
+
+(def cells (fn (es)
+  (let ((bs (map (fn (e) (int-text (blocks e))) es)) (bw (widest bs)))
+    (map (fn (i) (let ((e (nth es i)))
+                   (str-concat (if BLOCKS (str-concat (lpad (nth bs i) bw) " ") "") (e-name e) (mark e))))
+         (range 0 (length es))))))
+
+(def columns (fn (cs across)
+  (let ((n (length cs))
+        (ws (map str-width cs))
+        (colw (+ (fold (fn (w x) (math-max w x)) 0 ws) 2))
+        (fit (math-max 1 (floor (/ (+ WIDTH 2) colw))))
+        (rows (floor (/ (+ n (- fit 1)) fit)))
+        (cols (if across fit (floor (/ (+ n (- rows 1)) rows)))))
+    (map (fn (r)
+           (let ((idx (filter (fn (i) (< i n))
+                              (map (fn (c) (if across (+ (* r cols) c) (+ r (* c rows)))) (range 0 cols))))
+                 (last (- (length idx) 1)))
+             (str-join "" (map (fn (j) (let ((i (nth idx j)))
+                                         (if (= j last) (nth cs i) (str-concat (nth cs i) (spaces (- colw (nth ws i)))))))
+                               (range 0 (length idx))))))
+         (range 0 rows)))))
+
+(def commas (fn (cs)
+  (letv (lines cur)
+        (fold (fn (st i)
+                (letv (lines cur) st
+                  (let ((c (if (< i (- (length cs) 1)) (str-concat (nth cs i) ",") (nth cs i))))
+                    (cond ((= cur "") (tuple lines c))
+                          ((> (+ (str-width cur) 1 (str-width c)) WIDTH) (tuple (list-append lines cur) c))
+                          (else (tuple lines (str-concat cur " " c)))))))
+              (tuple (list) "") (range 0 (length cs)))
+    (if (= cur "") lines (list-append lines cur)))))
+
+(def write-lines (fn (lines)
+  (if (> (length lines) 0) (out-write (str-join "\n" lines) "\n"))))
+
+(def show (fn (es)
+  (cond ((= (length es) 0) #t)
+        (LONG (write-lines (long-rows es)))
+        ((= FMT "1") (write-lines (cells es)))
+        ((= FMT "m") (write-lines (commas (cells es))))
+        (else (write-lines (columns (cells es) (= FMT "x")))))))
+
+; ---- directories ----
+
+(def read-dir (fn (dir)
+  (letv (out next)
+        (iterate (fn (st)
+                   (letv (out next) st
+                     (if (is-nil next) (list)
+                       (letv (es nx) (dir-read dir next) (tuple (list-concat out es) nx)))))
+                 (tuple (list) 0))
+    out)))
+
+(def shown (fn (name)
+  (cond (ALL #t)
+        ((not (= (byte-sub name 0 1) ".")) #t)
+        (else ALMOST))))
+
+(def listing (fn (dir)
+  (let ((own (map (fn (en) (letv (name kind) en (entry name (join dir name) kind)))
+                  (filter (fn (en) (letv (name kind) en (shown name))) (read-dir dir))))
+        (dots (if ALL (list (entry "." dir "dir") (entry ".." (join dir "..") "dir")) (list))))
+    (order (list-concat dots own)))))
+
+(def list-dir (fn (dir depth)
+  (let ((es (listing dir)))
+    (do (if LONG (out-write "total " (int-text (fold (fn (t e) (+ t (blocks e))) 0 es)) "\n"))
+        (show es)
+        (if (and (has FL "R") (< depth 64))
+          (iterate (fn (rest)
+                     (if (= (length rest) 0) (list)
+                       (let ((e (nth rest 0)))
+                         (do (out-write "\n" (e-path e) ":\n")
+                             (list-dir (e-path e) (+ depth 1))
+                             (tail rest)))))
+                   (filter (fn (e) (and (= (e-kind e) "dir") (not (= (e-name e) ".")) (not (= (e-name e) ".."))))
+                           es)))))))
+
+; ---- the names given ----
+
+(def kind-of (fn (p)
+  (let ((s (if (or (has FL "d") LONG (= MARK "F")) (file-stat p) (file-stat p #t)))
+        (s2 (if (is-nil s) (file-stat p) s)))
+    (if (is-nil s2) "" (letv (k z t o) s2 k)))))
+
+(def main (fn ()
+  (if (> (length BAD) 0)
+    (do (err-write "ls: bad option -" (nth BAD 0) "\n" usage "\n") (exit-status 1))
+    (let ((names (if (= (length NAMES) 0) (list ".") NAMES))
+          (kinds (map kind-of names))
+          (missing (filter (fn (i) (= (nth kinds i) "")) (range 0 (length names))))
+          (as-file (fn (i) (and (not (= (nth kinds i) "")) (or (has FL "d") (not (= (nth kinds i) "dir"))))))
+          (files (order (map (fn (i) (entry (nth names i) (nth names i) (nth kinds i)))
+                             (filter as-file (range 0 (length names))))))
+          (dirs (order (map (fn (i) (entry (nth names i) (nth names i) "dir"))
+                            (filter (fn (i) (and (= (nth kinds i) "dir") (not (as-file i)))) (range 0 (length names))))))
+          (headed (> (length names) 1)))
+      (do (map (fn (i) (err-write "ls: " (nth names i) ": No such file or directory\n")) missing)
+          (show files)
+          (map (fn (i)
+                 (let ((d (nth dirs i)))
+                   (do (if (or (> i 0) (> (length files) 0)) (out-write "\n"))
+                       (if (or headed (> (length missing) 0)) (out-write (e-path d) ":\n"))
+                       (list-dir (e-path d) 0))))
+               (range 0 (length dirs)))
+          (if (> (length missing) 0) (exit-status 1)))))))
+
+(main)

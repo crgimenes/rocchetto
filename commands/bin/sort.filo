@@ -1,0 +1,213 @@
+; sort [-bdfnru] [-c | -C] [-t char] [-k key]... [-o output] [file...]:
+; the lines of the files (or of the input, - or none) in order, byte by
+; byte (LC_ALL=C). -k field[.char][bdfnr][,field[.char][bdfnr]] orders by
+; that part of the line (a key with letters of its own takes none of the
+; global ones), one key after another, then the whole line; fields are
+; split by char (-t) or begin at blanks, which stay with the field after
+; them. -b skips leading blanks, -d keeps only blanks and letters and
+; digits, -f folds case, -n by the number the key starts with, -r
+; backwards, -u one line of each equal key. -c says the first line out of
+; order (status 1), -C only the status. -o writes there (the input may be
+; that file: it is read whole first). -m is taken: merging is sorting.
+
+(def usage "usage: sort [-bdfnru] [-c | -C] [-t char] [-k key]... [-o output] [file...]")
+(def has (fn (opts letter) (> (length (filter (fn (o) (letv (l val) o (= l letter))) opts)) 0)))
+(def opt (fn (opts letter default) (fold (fn (v o) (letv (l val) o (if (= l letter) val v))) default opts)))
+(def all-of (fn (opts letter) (map (fn (o) (letv (l val) o val)) (filter (fn (o) (letv (l val) o (= l letter))) opts))))
+(def is-stdin (fn (src) (and (= (type-of src) "string") (= src "-"))))
+(def opened (fn (name) (if (= name "-") "-" (file-open name))))
+(def next-line (fn (src) (if (is-stdin src) (in-line) (file-line src))))
+(def strip (fn (l) (if (and (> (byte-len l) 0) (= (byte-at l (- (byte-len l) 1)) 10)) (byte-sub l 0 (- (byte-len l) 1)) l)))
+(def contains (fn (s c) (>= (byte-find s c) 0)))
+
+; ---- keys: (field1 char1 field2 char2 flags), field2 0 for the line's end ----
+
+(def key-re (re-compile "^([0-9]+)(\\.([0-9]+))?([bdfnr]*)(,([0-9]+)(\\.([0-9]+))?([bdfnr]*))?$" "E"))
+(def group (fn (s m i) (let ((g (nth m i))) (if (is-nil g) "" (letv (a b) g (byte-sub s a b))))))
+(def parse-key (fn (spec)
+  (let ((m (re-match key-re spec)))
+    (if (is-nil m) (list)
+      (let ((f1 (number (group spec m 1))) (c1 (group spec m 3)) (fl1 (group spec m 4))
+            (f2 (group spec m 6)) (c2 (group spec m 8)) (fl2 (group spec m 9)))
+        (if (= f1 0) (list)
+          (tuple f1 (if (= c1 "") 1 (number c1)) (if (= f2 "") 0 (number f2)) (if (= c2 "") 0 (number c2))
+                 (str-concat fl1 fl2))))))))
+
+; the (start end) of each field: after each sep with -t, else each run of
+; blanks and the non-blanks after it
+(def field-re (re-compile "[ \t]*[^ \t]+" "E"))
+(def fields (fn (line sep)
+  (if (= sep "")
+    (letv (out at)
+          (iterate (fn (st)
+                     (letv (out at) st
+                       (if (>= at (byte-len line)) (list)
+                         (let ((m (re-match field-re line at)))
+                           (if (is-nil m) (list)
+                             (letv (s e) (nth m 0) (tuple (list-append out (tuple s e)) e)))))))
+                   (tuple (list) 0))
+      out)
+    (letv (out at)
+          (iterate (fn (st)
+                     (letv (out at) st
+                       (if (> at (byte-len line)) (list)
+                         (let ((i (byte-find (byte-sub line at) sep)))
+                           (if (< i 0) (tuple (list-append out (tuple at (byte-len line))) (+ (byte-len line) 1))
+                             (tuple (list-append out (tuple at (+ at i))) (+ at i 1)))))))
+                   (tuple (list) 0))
+      out))))
+
+(def skip-blanks (fn (line at end)
+  (iterate (fn (i) (if (and (< i end) (or (= (byte-at line i) 32) (= (byte-at line i) 9))) (+ i 1) (list))) at)))
+
+; the bytes of line the key takes
+(def key-text (fn (line fs key blanks)
+  (letv (f1 c1 f2 c2 flags) key
+    (let ((n (length fs)) (len (byte-len line)))
+      (let ((start (if (> f1 n) len
+                     (letv (s e) (nth fs (- f1 1))
+                       (math-min e (+ (if blanks (skip-blanks line s e) s) (- c1 1))))))
+            (end (cond ((or (= f2 0) (> f2 n)) len)
+                       (else (letv (s e) (nth fs (- f2 1))
+                               (if (= c2 0) e (math-min e (+ (if blanks (skip-blanks line s e) s) c2))))))))
+        (byte-sub line start (math-max start end)))))))
+
+; ---- what a key compares as ----
+
+(def number-re (re-compile "^[ \t]*(-?[0-9]*(\\.[0-9]*)?)" "E"))
+(def digit-re (re-compile "[0-9]"))
+(def leading-number (fn (s)
+  (let ((t (group s (re-match number-re s) 1)))
+    (if (is-nil (re-match digit-re t)) 0
+      (number (str-concat (if (= (byte-sub t 0 1) "-") "-0" "0")
+                          (if (= (byte-sub t 0 1) "-") (byte-sub t 1) t)
+                          (if (contains t ".") "0" "")))))))
+(def keep-dict (fn (s) (bytes (filter (fn (b) (or (= b 32) (= b 9) (and (>= b 48) (<= b 57)) (and (>= b 65) (<= b 90)) (and (>= b 97) (<= b 122)))) (byte-list s)))))
+(def shaped (fn (text flags)
+  (let ((t1 (if (contains flags "d") (keep-dict text) text)))
+    (let ((t2 (if (contains flags "f") (str-upper t1) t1)))
+      (if (contains flags "n") (leading-number t2) t2)))))
+
+; line i decorated: a value for each key, then i (one list: a sort holds
+; one of these a line, and the line itself is not copied into it)
+(def decorate (fn (lines i keys sep)
+  (let ((line (nth lines i)))
+    (let ((fs (fields line sep)))
+      (list-concat (map (fn (k) (letv (f1 c1 f2 c2 flags) k (shaped (key-text line fs k (contains flags "b")) flags))) keys)
+                   (list i))))))
+
+(def sign (fn (x) (cond ((< x 0) -1) ((> x 0) 1) (else 0))))
+(def compare (fn (keys last lines)
+  (fn (a b)
+    (let ((la (nth lines (nth a (length keys)))) (lb (nth lines (nth b (length keys)))))
+        (let ((by-keys (fold (fn (acc i)
+                               (if (not (= acc 0)) acc
+                                 (letv (f1 c1 f2 c2 flags) (nth keys i)
+                                   (let ((x (nth a i)) (y (nth b i)))
+                                     (let ((c (if (= (type-of x) "number") (sign (- x y)) (byte-cmp x y))))
+                                       (if (contains flags "r") (- 0 c) c))))))
+                             0 (range 0 (length keys)))))
+          (cond ((not (= by-keys 0)) by-keys)
+                ((= last "") 0)
+                ((= last "r") (- 0 (byte-cmp la lb)))
+                (else (byte-cmp la lb))))))))
+
+; the lines of the sources, and the status: 2 when one could not be read;
+; each read whole and split, not gathered a line at a time
+(def whole-of (fn (src)
+  (str-join "" (iterate (fn (acc) (let ((b (if (is-stdin src) (in-read 65536) (file-read src 65536))))
+                                    (if (is-nil b) (list) (list-append acc b))))
+                        (list)))))
+(def lines-of (fn (text)
+  (let ((ls (str-split "\n" text)))
+    (if (and (> (length ls) 0) (= (nth ls (- (length ls) 1)) "")) (map (fn (i) (nth ls i)) (range 0 (- (length ls) 1))) ls))))
+; sort holds every line at once: past this many lines, or bytes, it says
+; so instead of running out of memory (more than this belongs in a database)
+(def most 20000)
+(def most-bytes 1048576)
+(def newlines (fn (s)
+  (letv (from k)
+        (iterate (fn (st) (letv (from k) st (let ((i (byte-find s "\n" from))) (if (< i 0) (list) (tuple (+ i 1) (+ k 1))))))
+                 (tuple 0 0))
+    k)))
+; (lines status): status 2 when a file could not be read, -1 too many
+; lines, -2 too many bytes
+(def read-all (fn (names)
+  (letv (texts st size)
+        (fold (fn (acc name)
+                (letv (texts st size) acc
+                  (if (< st 0) acc
+                    (let ((src (opened name)))
+                      (if (and (= (type-of src) "string") (not (is-stdin src)))
+                        (do (err-write "sort: " name ": " src "\n") (tuple texts 2 size))
+                        (let ((t (whole-of src)))
+                          (do (if (is-stdin src) #f (file-close src))
+                              (cond ((> (+ size (byte-len t)) most-bytes) (tuple (list) -2 0))
+                                    ((> (+ (length texts) (newlines t)) most) (tuple (list) -1 0))
+                                    (else (tuple (list-concat texts (lines-of t)) st (+ size (byte-len t))))))))))))
+              (tuple (list) 0 0) names)
+    (tuple texts st))))
+
+; the first line out of order, -1 when none: two lines decorated at a time
+(def disorder (fn (lines dec cmp unique)
+  (letv (at prev i)
+        (iterate (fn (st)
+                   (letv (at prev i) st
+                     (if (or (>= at 0) (>= i (length lines))) (list)
+                       (let ((d (dec (nth lines i))))
+                         (if (and (> i 0) (let ((c (cmp prev d))) (if unique (>= c 0) (> c 0))))
+                           (tuple i prev i)
+                           (tuple -1 d (+ i 1)))))))
+                 (tuple -1 (list) 0))
+    at)))
+
+; the lines written 256 at a time: the whole output at once would be one
+; more copy of the input in memory
+(def write-lines (fn (lines put)
+  (iterate (fn (i)
+             (if (>= i (length lines)) (list)
+               (let ((j (math-min (length lines) (+ i 256))))
+                 (do (put (str-concat (str-join "\n" (map (fn (k) (nth lines k)) (range i j))) "\n")) j))))
+           0)))
+
+(def main (fn ()
+(letv (opts files bad) (getopt ARGS "bcCdfmnrut:k:o:")
+  (let ((globals (str-join "" (map (fn (l) (if (has opts l) l "")) (list "b" "d" "f" "n" "r"))))
+        (sep (opt opts "t" "")) (output (opt opts "o" "")) (unique (has opts "u"))
+        (parsed (map parse-key (all-of opts "k"))))
+    (cond ((not (= bad "")) (do (err-write "sort: bad option -" bad "\n" usage "\n") (exit-status 2)))
+          ((> (byte-len sep) 1) (do (err-write "sort: -t takes one character\n") (exit-status 2)))
+          ((> (length (filter is-nil parsed)) 0)
+           (do (err-write "sort: -k field[.char][bdfnr][,field[.char][bdfnr]]\n") (exit-status 2)))
+          (else
+            ; no -k: the whole line is the key; a key without letters takes the global ones
+            (let ((keys (if (= (length parsed) 0) (list (tuple 1 1 0 0 globals))
+                          (map (fn (k) (letv (f1 c1 f2 c2 flags) k (tuple f1 c1 f2 c2 (if (= flags "") globals flags)))) parsed)))
+                  (name (if (= (length files) 0) "-" (nth files 0))))
+              (letv (lines st) (read-all (if (= (length files) 0) (list "-") files))
+                (if (< st 0)
+                  (do (err-write "sort: more than " (if (= st -1) (str-concat (int-text most) " lines") "1M")
+                                 ": a database fits this better\n")
+                      (exit-status 2))
+                (let ((dec (fn (i) (decorate lines i keys sep)))
+                      (cmp (compare keys (cond (unique "") ((contains globals "r") "r") (else "+")) lines))
+                      (places (range 0 (length lines))))
+                  (if (or (has opts "c") (has opts "C"))
+                    (let ((at (disorder places dec cmp unique)))
+                      (if (< at 0) (exit-status st)
+                        (do (if (has opts "c")
+                              (err-write "sort: " name ":" (int-text (+ at 1)) ": disorder: " (nth lines at) "\n") #f)
+                            (exit-status 1))))
+                    ; the plain sort (no key, -r alone): lines compared as they are
+                    (let ((sorted (if (and (= (length parsed) 0) (or (= globals "") (= globals "r")))
+                                    (list-sort lines (if (= globals "r") (fn (a b) (byte-cmp b a)) (fn (a b) (byte-cmp a b)))
+                                               (list) unique)
+                                    (map (fn (i) (nth lines i)) (list-sort places cmp dec unique)))))
+                      (if (= output "")
+                        (do (write-lines sorted out-write) (exit-status st))
+                        (let ((h (file-open output "w")))
+                          (if (= (type-of h) "string")
+                            (do (err-write "sort: " output ": " h "\n") (exit-status 2))
+                            (do (write-lines sorted (fn (t) (file-write h t))) (file-close h) (exit-status st)))))))))))))))))
+
+(main)

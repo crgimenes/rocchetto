@@ -1,0 +1,39 @@
+; tee [-a] [file...]: the input passed on to the output and kept in each
+; file (-a: after what the file has), a piece at a time. A file that cannot
+; be opened or written is said and left; the rest go on, and $? is 1.
+
+(def usage "usage: tee [-a] [file...]")
+(def say (fn (name why) (do (err-write "tee: " name ": " why "\n") 1)))
+
+(def main (fn ()
+  (letv (opts files bad) (getopt ARGS "a")
+    (if (not (= bad "")) (do (err-write usage "\n") (exit-status 2))
+      (let ((mode (if (> (length opts) 0) "a" "w")))
+        ; (open worst): open, the (name handle) still taking the input
+        (letv (open worst)
+              (fold (fn (st name)
+                      (letv (open worst) st
+                        (let ((h (file-open name mode)))
+                          (if (= (type-of h) "string") (tuple open (say name h))
+                            (tuple (list-append open (tuple name h)) worst)))))
+                    (tuple (list) 0) files)
+          (letv (open worst)
+                (iterate (fn (st)
+                           (letv (open worst) st
+                             (let ((b (in-read 65536)))
+                               (if (is-nil b) (list)
+                                 (do (out-write b)
+                                     (fold (fn (acc f)
+                                             (letv (left w) acc
+                                               (letv (name h) f
+                                                 (let ((r (file-write h b)))
+                                                   (if (= (type-of r) "string")
+                                                     (do (file-close h) (tuple left (say name r)))
+                                                     (tuple (list-append left f) w))))))
+                                           (tuple (list) worst) open))))))
+                         (tuple open worst))
+            (exit-status
+              (fold (fn (w f) (letv (name h) f (let ((r (file-close h))) (if (= (type-of r) "string") (say name r) w))))
+                    worst open)))))))))
+
+(main)

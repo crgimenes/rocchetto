@@ -1,0 +1,11 @@
+; Enter shows the file in the pager. "man" is the target for files that are
+; already on this machine; "read" would ask the host, which is for the site.
+(cond
+  ((key-up?) (move -1))
+  ((key-down?) (move 1))
+  ((or (key-left?) (key-right?)) (switch))
+  ((key-back?) (exec "main"))
+  ((and (= KEY KEY_ENTER) (> (entry-count (dir)) 0))
+    (letv (path heading date size) (entry-at (dir) sel)
+      (exec "man" path)))
+  (else #f))

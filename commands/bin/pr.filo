@@ -1,0 +1,109 @@
+; pr [+page] [-columns] [-adtn] [-h header] [-l lines] [-o offset] [-w width]
+; [file...]: each file (or the input, - or none) in pages of 66 lines (-l):
+; five lines of header (the file's time, its name or -h, the page), the
+; text, five blank ones. -t leaves header and filling out, as a page of 10
+; lines or fewer does; -d leaves a blank line after each; -n numbers them;
+; -o moves them right; +page starts there. -columns sets the text in that
+; many columns of width (-w, 72) over columns, down each (-a: across),
+; the last page's evened out.
+
+(def usage "usage: pr [+page] [-columns] [-adtn] [-h header] [-l lines] [-o offset] [-w width] [file...]")
+(def has (fn (opts letter) (> (length (filter (fn (o) (letv (l val) o (= l letter))) opts)) 0)))
+(def opt (fn (opts letter default) (fold (fn (v o) (letv (l val) o (if (= l letter) val v))) default opts)))
+(def whole-re (re-compile "^[0-9]+$" "E"))
+(def is-whole (fn (s) (not (is-nil (re-match whole-re s)))))
+(def is-stdin (fn (src) (and (= (type-of src) "string") (= src "-"))))
+(def opened (fn (name) (if (= name "-") "-" (file-open name))))
+(def strip (fn (l) (if (and (> (byte-len l) 0) (= (byte-at l (- (byte-len l) 1)) 10)) (byte-sub l 0 (- (byte-len l) 1)) l)))
+(def spaces (fn (n) (str-join "" (map (fn (i) " ") (range 0 (math-max 0 n))))))
+(def pad-left (fn (s w) (str-concat (spaces (- w (byte-len s))) s)))
+
+(def whole-of (fn (src)
+  (str-join "" (iterate (fn (acc) (let ((b (if (is-stdin src) (in-read 65536) (file-read src 65536))))
+                                    (if (is-nil b) (list) (list-append acc b))))
+                        (list)))))
+(def lines-of (fn (src)
+  (let ((ls (str-split "\n" (whole-of src))))
+    (if (= (nth ls (- (length ls) 1)) "") (map (fn (i) (nth ls i)) (range 0 (- (length ls) 1))) ls))))
+
+; s cut to at most w columns, and padded to pad columns (0: not padded)
+(def fit (fn (s w pad)
+  (letv (out used)
+        (fold (fn (st cp)
+                (letv (out used) st
+                  (let ((cw (rune-width cp)))
+                    (if (> (+ used cw) w) (tuple out (+ w 1)) (tuple (list-append out cp) (+ used cw))))))
+              (tuple (list) 0) (utf8-runes (byte-sub s 0 (math-min (byte-len s) (* 4 (+ w 1))))))
+    (let ((text (utf8-encode out)))
+      (str-concat text (spaces (- pad (str-width text))))))))
+
+; the time of a header, "" on a machine with no clock
+(def stamp (fn (secs)
+  (if (is-nil secs) ""
+    (letv (st out err) (run (list "date" "-r" (int-text secs) "+%b %e %H:%M %Y"))
+      (if (= st 0) (strip out) "")))))
+
+; the rows of a page: rows of k cells, down the columns or across them
+(def page-rows (fn (lines from taken rows k across colw)
+  (map (fn (r)
+         (let ((cells (filter (fn (x) (not (is-nil x)))
+                              (map (fn (c) (let ((j (if across (+ (* r k) c) (+ (* c rows) r))))
+                                             (if (< j taken) (list (nth lines (+ from j))) (list))))
+                                   (range 0 k)))))
+           (if (= k 1) (nth (nth cells 0) 0)
+             (str-join "" (map (fn (i) (fit (nth (nth cells i) 0) (- colw 1) (if (< i (- (length cells) 1)) colw 0)))
+                               (range 0 (length cells)))))))
+       (range 0 rows))))
+
+; settings: (start k across double plain numbered header length offset width)
+(def print-file (fn (name lines when settings)
+  (letv (start k across double plain numbered header len offset width) settings
+    (let ((plain (or plain (<= len 10))) (n (length lines)))
+      (let ((body (if plain len (- len 10))))
+        (let ((rowcap (if double (math-max 1 (floor (/ body 2))) body)) (colw (floor (/ (+ width 1) k)))
+              (text (if numbered (map (fn (i) (str-concat (pad-left (int-text (+ i 1)) 5) "\t" (nth lines i))) (range 0 n)) lines))
+              (title (if plain "" (str-concat (stamp when) " " (if (= header "") name header) " Page "))))
+          (iterate (fn (st)
+                     (letv (i p) st
+                       (if (>= i n) (list)
+                         (let ((cap (* rowcap k)))
+                           (let ((taken (math-min cap (- n i))))
+                             (let ((rows (if (= taken cap) rowcap (math-max 1 (ceil (/ taken k))))))
+                               (do (if (< p start) #f
+                                     (do (if plain #f (out-write "\n\n" title (int-text p) "\n\n\n"))
+                                         (map (fn (row) (out-write (if (= row "") "" (str-concat (spaces offset) row)) (if double "\n\n" "\n")))
+                                              (page-rows text i taken rows k across colw))
+                                         (if plain #f (out-write (str-join "" (map (fn (x) "\n") (range 0 (+ 5 (- body (* rows (if double 2 1)))))))))))
+                                   (tuple (+ i taken) (+ p 1)))))))))
+                   (tuple 0 1))))))))
+
+(def main (fn ()
+  (let ((pages (filter (fn (a) (and (= (byte-sub a 0 1) "+") (is-whole (byte-sub a 1)))) ARGS))
+        (cols (filter (fn (a) (and (= (byte-sub a 0 1) "-") (is-whole (byte-sub a 1)))) ARGS)))
+    (letv (opts files bad)
+          (getopt (filter (fn (a) (not (or (and (= (byte-sub a 0 1) "+") (is-whole (byte-sub a 1)))
+                                           (and (= (byte-sub a 0 1) "-") (is-whole (byte-sub a 1))))))
+                          ARGS)
+                  "adtnh:l:o:w:")
+      (let ((num (fn (l d) (let ((v (opt opts l d))) (if (is-whole v) (number v) -1))))
+            (start (if (> (length pages) 0) (number (byte-sub (nth pages (- (length pages) 1)) 1)) 1))
+            (k (if (> (length cols) 0) (number (byte-sub (nth cols (- (length cols) 1)) 1)) 1)))
+        (let ((len (num "l" "66")) (offset (num "o" "0")) (width (num "w" "72")))
+          (if (or (not (= bad "")) (< start 1) (< k 1) (< len 1) (< offset 0) (< width 1) (< (floor (/ (+ width 1) k)) 2))
+            (do (err-write usage "\n") (exit-status 2))
+            (let ((settings (tuple start k (has opts "a") (has opts "d") (has opts "t") (has opts "n")
+                                   (opt opts "h" "") len offset width)))
+              (exit-status
+                (fold (fn (worst name)
+                        (let ((src (opened name)))
+                          (if (and (= (type-of src) "string") (not (is-stdin src)))
+                            (do (err-write "pr: " name ": " src "\n") 1)
+                            (let ((info (if (is-stdin src) (list) (file-stat name))))
+                              (do (print-file (if (is-stdin src) "" name) (lines-of src)
+                                              (if (is-nil info) (now) (letv (kind size mtime from) info mtime))
+                                              settings)
+                                  (if (is-stdin src) #f (file-close src))
+                                  worst)))))
+                      0 (if (= (length files) 0) (list "-") files)))))))))))
+
+(main)

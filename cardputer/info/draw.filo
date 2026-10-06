@@ -1,0 +1,12 @@
+(title "info")
+(let ((items (rows)))
+  (map
+    (fn (i)
+      (letv (name value) (nth items i)
+        (do
+          (attr A_DIM)
+          (print-at (+ 1 i) 0 name)
+          (attr 0)
+          (print-at (+ 1 i) 6 (str-sub value 0 (math-min (- W 6) (str-len value)))))))
+    (range (length items))))
+(hint-bar "any key: back")

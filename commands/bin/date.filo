@@ -1,0 +1,112 @@
+; date [-u] [-r seconds] [+format]: now, as this machine's clock says, in
+; local time (-u: UTC); -r: the moment that many seconds after 1970. The format takes %Y %C %y %m %d %e %j %H %I %M %S %p %a %A %b
+; %h %B %u %w %s %z %Z %F %T %D %R %n %t and %%; without one it is
+; "%a %b %e %H:%M:%S %Z %Y". Setting the clock is not here.
+
+(def usage "usage: date [-u] [-r seconds] [+format]")
+(def wdays (list "Sunday" "Monday" "Tuesday" "Wednesday" "Thursday" "Friday" "Saturday"))
+(def months (list "January" "February" "March" "April" "May" "June" "July" "August" "September"
+                  "October" "November" "December"))
+
+(def pad (fn (n width c) (let ((t (int-text n))) (str-concat (str-join "" (map (fn (i) c) (range 0 (math-max 0 (- width (byte-len t)))))) t))))
+(def short (fn (s) (byte-sub s 0 3)))
+
+; days since 1970-01-01 as (year month day): Howard Hinnant's civil_from_days
+(def civil (fn (days)
+  (let ((z (+ days 719468)))
+    (let ((era (floor (/ z 146097))))
+      (let ((doe (- z (* era 146097))))
+        (let ((yoe (floor (/ (- (+ (- doe (floor (/ doe 1460))) (floor (/ doe 36524))) (floor (/ doe 146096))) 365))))
+          (let ((doy (- doe (- (+ (* 365 yoe) (floor (/ yoe 4))) (floor (/ yoe 100))))))
+            (let ((mp (floor (/ (+ (* 5 doy) 2) 153))))
+              (let ((d (+ (- doy (floor (/ (+ (* 153 mp) 2) 5))) 1))
+                    (mo (if (< mp 10) (+ mp 3) (- mp 9))))
+                (tuple (+ yoe (* era 400) (if (<= mo 2) 1 0)) mo d))))))))))
+
+(def leap (fn (y) (and (= (% y 4) 0) (or (not (= (% y 100) 0)) (= (% y 400) 0)))))
+(def before (list 0 31 59 90 120 151 181 212 243 273 304 334))
+
+; every field of a moment, for the format: (y mo d hh mm ss wday yday secs tz)
+(def fields (fn (secs tz)
+  (let ((local (+ secs (* tz 60))))
+    (let ((days (floor (/ local 86400))))
+      (let ((in-day (- local (* days 86400))))
+        (letv (y mo d) (civil days)
+          (tuple y mo d (floor (/ in-day 3600)) (% (floor (/ in-day 60)) 60) (% in-day 60)
+                 (% (+ (% days 7) 11) 7)
+                 (+ (nth before (- mo 1)) d (if (and (leap y) (> mo 2)) 1 0))
+                 secs tz)))))))
+
+(def zone (fn (tz)
+  (let ((a (if (< tz 0) (- 0 tz) tz)))
+    (str-concat (if (< tz 0) "-" "+") (pad (floor (/ a 60)) 2 "0") (pad (% a 60) 2 "0")))))
+
+(def one (fn (c f)
+  (letv (y mo d hh mm ss wday yday secs tz) f
+    (cond ((= c "Y") (int-text y))
+          ((= c "C") (pad (floor (/ y 100)) 2 "0"))
+          ((= c "y") (pad (% y 100) 2 "0"))
+          ((= c "m") (pad mo 2 "0"))
+          ((= c "d") (pad d 2 "0"))
+          ((= c "e") (pad d 2 " "))
+          ((= c "j") (pad yday 3 "0"))
+          ((= c "H") (pad hh 2 "0"))
+          ((= c "I") (pad (let ((h (% hh 12))) (if (= h 0) 12 h)) 2 "0"))
+          ((= c "M") (pad mm 2 "0"))
+          ((= c "S") (pad ss 2 "0"))
+          ((= c "p") (if (< hh 12) "AM" "PM"))
+          ((= c "a") (short (nth wdays wday)))
+          ((= c "A") (nth wdays wday))
+          ((or (= c "b") (= c "h")) (short (nth months (- mo 1))))
+          ((= c "B") (nth months (- mo 1)))
+          ((= c "u") (int-text (if (= wday 0) 7 wday)))
+          ((= c "w") (int-text wday))
+          ((= c "s") (int-text secs))
+          ((= c "z") (zone tz))
+          ((= c "Z") (if (= tz 0) "UTC" "local"))
+          ((= c "F") (str-concat (int-text y) "-" (pad mo 2 "0") "-" (pad d 2 "0")))
+          ((= c "T") (str-concat (pad hh 2 "0") ":" (pad mm 2 "0") ":" (pad ss 2 "0")))
+          ((= c "R") (str-concat (pad hh 2 "0") ":" (pad mm 2 "0")))
+          ((= c "D") (str-concat (pad mo 2 "0") "/" (pad d 2 "0") "/" (pad (% y 100) 2 "0")))
+          ((= c "n") "\n")
+          ((= c "t") "\t")
+          ((= c "%") "%")
+          (else (str-concat "%" c))))))
+
+(def formatted (fn (format f)
+  (letv (out i)
+        (iterate (fn (st)
+                   (letv (out i) st
+                     (cond ((>= i (byte-len format)) (list))
+                           ((and (= (byte-sub format i (+ i 1)) "%") (< (+ i 1) (byte-len format)))
+                            (tuple (str-concat out (one (byte-sub format (+ i 1) (+ i 2)) f)) (+ i 2)))
+                           (else (tuple (str-concat out (byte-sub format i (+ i 1))) (+ i 1))))))
+                 (tuple "" 0))
+    out)))
+
+(def whole-re (re-compile "^-?[0-9]+$" "E"))
+
+; (utc seconds format bad) from the words: bad the first one not understood
+(def parsed (fn (args)
+  (letv (utc at format bad skip)
+        (fold (fn (st i)
+                (letv (utc at format bad skip) st
+                  (let ((a (nth args i)))
+                    (cond ((or skip (not (= bad ""))) (tuple utc at format bad #f))
+                          ((= a "-u") (tuple #t at format bad #f))
+                          ((= a "-r") (if (and (< (+ i 1) (length args)) (not (is-nil (re-match whole-re (nth args (+ i 1))))))
+                                        (tuple utc (number (nth args (+ i 1))) format bad #t)
+                                        (tuple utc at format a #f)))
+                          ((= (byte-sub a 0 1) "+") (tuple utc at (byte-sub a 1) bad #f))
+                          (else (tuple utc at format a #f))))))
+              (tuple #f "" "%a %b %e %H:%M:%S %Z %Y" "" #f) (range 0 (length args)))
+    (tuple utc at format bad))))
+
+(def main (fn ()
+  (letv (utc at format bad) (parsed ARGS)
+    (let ((secs (if (= (type-of at) "number") at (now))) (zone-now (time-zone)))
+      (cond ((not (= bad "")) (do (err-write "date: " bad ": " usage "\n") (exit-status 2)))
+            ((or (is-nil secs) (and (not utc) (is-nil zone-now))) (do (err-write "date: this machine has no clock\n") (exit-status 1)))
+            (else (out-write (formatted format (fields secs (if utc 0 zone-now))) "\n")))))))
+
+(main)

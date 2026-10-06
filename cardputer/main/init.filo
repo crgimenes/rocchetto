@@ -1,0 +1,10 @@
+; The Cardputer's front screen: one key opens each thing, no Enter needed.
+; Each item is the code of its key (lower case; upper case is 32 less), the
+; key as shown, the label, and where it goes.
+
+(def items
+  (list
+    (tuple 115 "S" "Shell" "shell")
+    (tuple 102 "F" "Files" "files")
+    (tuple 110 "N" "Snake" "snake-filo")
+    (tuple 105 "I" "Info" "info")))

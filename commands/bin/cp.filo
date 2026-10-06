@@ -1,0 +1,83 @@
+; cp [-Rrfp] source target, or cp [-Rrfp] source... directory: each file
+; copied to the target, or into the directory under its own name; -R (or
+; -r) a directory with all under it (a link inside it is said, not
+; copied); -p keeps the time the source was
+; written. -i (asking) is not here; -f is what cp does anyway.
+
+(def usage "usage: cp [-Rfp] source target | cp [-Rfp] source... directory")
+(def has (fn (opts letter) (> (length (filter (fn (o) (letv (l val) o (= l letter))) opts)) 0)))
+(def stat (fn (p) (file-stat p #t)))
+(def kind (fn (p) (let ((s (stat p))) (if (is-nil s) "" (letv (k z t o) s k)))))
+; inside a tree a link is itself: not followed, and not made here
+(def own-kind (fn (p) (let ((s (file-stat p))) (if (is-nil s) "" (letv (k z t o) s k)))))
+(def base (fn (p)
+  (let ((parts (filter (fn (s) (> (byte-len s) 0)) (str-split "/" p))))
+    (if (= (length parts) 0) "/" (nth parts (- (length parts) 1))))))
+(def join (fn (dir name)
+  (if (= (byte-at dir (- (byte-len dir) 1)) 47) (str-concat dir name) (str-concat dir "/" name))))
+
+; the time the source was written onto the copy, when asked and known
+(def keep-time (fn (src dst keep)
+  (if (not keep) #t
+    (letv (k z t o) (stat src)
+      (if (is-nil t) #t
+        (let ((r (file-touch dst t)))
+          (if (= (type-of r) "string") (do (err-write "cp: " dst ": " r "\n") #f) #t)))))))
+
+(def copy-file (fn (src dst keep) (and (cp src dst) (keep-time src dst keep))))
+
+(def entries (fn (dir)
+  (letv (out next)
+        (iterate (fn (st)
+                   (letv (out next) st
+                     (if (is-nil next) (list)
+                       (letv (es nx) (dir-read dir next)
+                         (tuple (list-concat out (map (fn (e) (letv (n k) e n)) es)) nx)))))
+                 (tuple (list) 0))
+    out)))
+
+; a tree: a stack of (source destination), each directory made before
+; what goes in it
+(def copy-tree (fn (src dst keep)
+  (letv (stack ok)
+        (iterate (fn (st)
+                   (letv (stack ok) st
+                     (if (= (length stack) 0) (list)
+                       (letv (s d) (nth stack 0)
+                         (cond
+                           ((= (own-kind s) "link")
+                            (do (err-write "cp: " s ": a link, not copied (no links here)\n") (tuple (tail stack) #f)))
+                           ((= (kind s) "dir")
+                           (let ((made (or (= (kind d) "dir") (mkdir d))))
+                             (tuple (list-concat (map (fn (n) (tuple (join s n) (join d n))) (if made (entries s) (list)))
+                                                 (tail stack))
+                                    (and made ok))))
+                           (else (tuple (tail stack) (and (copy-file s d keep) ok))))))))
+                 (tuple (list (tuple src dst)) #t))
+    ok)))
+
+(def inside (fn (a b)
+  (let ((pa (path-resolve a)) (pb (path-resolve b)))
+    (or (= pa pb) (and (> (byte-len pb) (byte-len pa)) (= (byte-sub pb 0 (+ (byte-len pa) 1)) (str-concat pa "/")))))))
+
+(def copy-one (fn (src target into recursive keep)
+  (let ((k (kind src)) (dst (if into (join target (base src)) target)))
+    (cond ((= k "") (do (err-write "cp: " src ": No such file or directory\n") #f))
+          ((and (= k "dir") (not recursive)) (do (err-write "cp: " src " is a directory (not copied)\n") #f))
+          ((and (= k "dir") (inside src dst)) (do (err-write "cp: " dst ": cannot copy a directory into itself\n") #f))
+          ((= k "dir") (copy-tree src dst keep))
+          (else (copy-file src dst keep))))))
+
+(letv (opts args bad) (getopt ARGS "Rrfpi")
+  (cond ((not (= bad "")) (do (err-write "cp: bad option -" bad "\n" usage "\n") (exit-status 1)))
+        ((has opts "i") (do (err-write "cp: -i is not supported here (nothing to ask with)\n") (exit-status 1)))
+        ((< (length args) 2) (do (err-write usage "\n") (exit-status 1)))
+        (else
+          (let ((target (nth args (- (length args) 1)))
+                (sources (map (fn (i) (nth args i)) (range 0 (- (length args) 1))))
+                (recursive (or (has opts "R") (has opts "r")))
+                (keep (has opts "p")))
+            (let ((into (= (kind target) "dir")))
+              (if (and (> (length sources) 1) (not into))
+                (do (err-write "cp: " target ": Not a directory\n") (exit-status 1))
+                (exit-status (fold (fn (st s) (if (copy-one s target into recursive keep) st 1)) 0 sources))))))))

@@ -1,0 +1,79 @@
+; split [-l lines | -b bytes[k|m]] [-a length] [file [prefix]]: the file (or
+; the input, - or none) cut into pieces of 1000 lines (-l) or of so many
+; bytes (-b, k 1024, m 1048576), written to prefix (x) and a suffix of
+; length letters (-a, 2): xaa, xab, ... Running out of suffixes stops it.
+
+(def usage "usage: split [-l lines | -b bytes[k|m]] [-a length] [file [prefix]]")
+(def has (fn (opts letter) (> (length (filter (fn (o) (letv (l val) o (= l letter))) opts)) 0)))
+(def opt (fn (opts letter default) (fold (fn (v o) (letv (l val) o (if (= l letter) val v))) default opts)))
+(def is-stdin (fn (src) (and (= (type-of src) "string") (= src "-"))))
+(def opened (fn (name) (if (= name "-") "-" (file-open name))))
+(def size-re (re-compile "^([0-9]+)([km]?)$" "E"))
+(def letters "abcdefghijklmnopqrstuvwxyz")
+
+; "12", "3k", "1m" as a count, nil when it is not one or is 0
+(def count-of (fn (s)
+  (let ((m (re-match size-re s)))
+    (if (is-nil m) (list)
+      (let ((part (fn (g) (letv (a b) (nth m g) (byte-sub s a b)))))
+        (let ((k (* (number (part 1)) (cond ((= (part 2) "k") 1024) ((= (part 2) "m") 1048576) (else 1)))))
+          (if (= k 0) (list) (list k))))))))
+
+(def suffix (fn (i width)
+  (str-join "" (map (fn (k) (let ((d (% (floor (/ i (pow 26 (- width k 1)))) 26))) (byte-sub letters d (+ d 1))))
+                    (range 0 width)))))
+
+; (handle why): the piece i open to write, or "" and why not
+(def open-piece (fn (prefix i width)
+  (if (>= i (pow 26 width)) (tuple "" "too many files")
+    (let ((name (str-concat prefix (suffix i width))))
+      (let ((h (file-open name "w")))
+        (if (= (type-of h) "string") (tuple "" (str-concat name ": " h)) (tuple h "")))))))
+(def close-piece (fn (h) (if (= (type-of h) "string") "" (let ((r (file-close h))) (if (= (type-of r) "string") r "")))))
+(def is-open (fn (h) (not (= (type-of h) "string"))))
+
+; take gives the next chunk (at most room long when it counts bytes) or nil;
+; measure says how much of a piece it fills
+(def pieces (fn (take measure limit prefix width)
+  (iterate (fn (st)
+             (letv (h fill i why) st
+               (if (not (= why "")) (list)
+                 (let ((rotate (or (not (is-open h)) (>= fill limit))))
+                   (let ((c (take (if rotate limit (- limit fill)))))
+                     (if (is-nil c) (list)
+                       (letv (h2 why2) (if rotate
+                                         (let ((closed (close-piece h)))
+                                           (if (= closed "") (open-piece prefix i width) (tuple "" closed)))
+                                         (tuple h ""))
+                         (if (not (= why2 "")) (tuple h2 0 i why2)
+                           (let ((w (file-write h2 c)))
+                             (if (= (type-of w) "string") (tuple h2 0 i w)
+                               (tuple h2 (+ (if rotate 0 fill) (measure c)) (if rotate (+ i 1) i) "")))))))))))
+           (tuple "" 0 0 ""))))
+
+(def main (fn ()
+  (letv (opts args bad) (getopt ARGS "l:b:a:")
+    (let ((lines (count-of (opt opts "l" "1000"))) (bytes (count-of (opt opts "b" "1")))
+          (width (count-of (opt opts "a" "2"))))
+      (cond ((or (not (= bad "")) (> (length args) 2) (and (has opts "l") (has opts "b"))
+                 (is-nil lines) (is-nil bytes) (is-nil width)
+                 (and (has opts "l") (not (is-nil (re-match (re-compile "[km]$" "E") (opt opts "l" ""))))))
+             (do (err-write usage "\n") (exit-status 2)))
+            (else
+              (let ((name (if (> (length args) 0) (nth args 0) "-"))
+                    (prefix (if (> (length args) 1) (nth args 1) "x")))
+                (let ((src (opened name)))
+                  (if (and (= (type-of src) "string") (not (is-stdin src)))
+                    (do (err-write "split: " name ": " src "\n") (exit-status 1))
+                    (letv (h fill i why)
+                          (if (has opts "b")
+                            (pieces (fn (room) (if (is-stdin src) (in-read (math-min room 65536)) (file-read src (math-min room 65536))))
+                                    byte-len (nth bytes 0) prefix (nth width 0))
+                            (pieces (fn (room) (if (is-stdin src) (in-line) (file-line src)))
+                                    (fn (c) 1) (nth lines 0) prefix (nth width 0)))
+                      (let ((closed (close-piece h)))
+                        (let ((said (if (= why "") closed why)))
+                          (if (= said "") (exit-status 0)
+                            (do (err-write "split: " said "\n") (exit-status 1)))))))))))))))
+
+(main)

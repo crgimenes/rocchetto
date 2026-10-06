@@ -1,0 +1,1 @@
+(cat (str-concat "/home/" USER "/.history"))

@@ -1,0 +1,57 @@
+; nl [-b a|t|n|pRE] [-n ln|rn|rz] [-w width] [-s sep] [-v start] [-i incr]
+; [file]: the lines numbered. -b which ones: all, those with text (the
+; default), none, or those the basic regex RE matches; -n how: left,
+; right, right with zeros; the number in width columns (6) and sep after it
+; (a tab). An unnumbered line gets the width in spaces and sep. Logical
+; pages (-d -f -h -l -p) are not here.
+
+(def usage "usage: nl [-b a|t|n|pRE] [-n ln|rn|rz] [-w width] [-s sep] [-v start] [-i incr] [file]")
+
+(def opt (fn (opts letter default)
+  (fold (fn (v o) (letv (l val) o (if (= l letter) val v))) default opts)))
+
+(def pad (fn (s width with) (str-concat (str-join "" (map (fn (i) with) (range 0 (math-max 0 (- width (byte-len s)))))) s)))
+(def pad-right (fn (s width) (str-concat s (str-join "" (map (fn (i) " ") (range 0 (math-max 0 (- width (byte-len s)))))))))
+
+(def number-text (fn (n how width)
+  (cond ((= how "ln") (pad-right (int-text n) width))
+        ((= how "rz") (if (< n 0) (str-concat "-" (pad (int-text (- 0 n)) (- width 1) "0")) (pad (int-text n) width "0")))
+        (else (pad (int-text n) width " ")))))
+
+(def whole (fn (s) (and (> (byte-len s) 0) (= (str-trim s) s) (not (is-nil (re-match (re-compile "^-*[0-9][0-9]*$") s))))))
+
+(letv (opts files bad) (getopt ARGS "b:n:w:s:v:i:")
+  (let ((body (opt opts "b" "t"))
+        (how (opt opts "n" "rn"))
+        (width (opt opts "w" "6"))
+        (sep (opt opts "s" "\t"))
+        (start (opt opts "v" "1"))
+        (incr (opt opts "i" "1")))
+    (cond ((not (= bad "")) (do (err-write "nl: bad option -" bad "\n" usage "\n") (exit-status 1)))
+          ((> (length files) 1) (do (err-write usage "\n") (exit-status 1)))
+          ((not (or (= body "a") (= body "t") (= body "n") (= (byte-sub body 0 1) "p")))
+           (do (err-write "nl: -b takes a, t, n or pRE\n") (exit-status 1)))
+          ((not (or (= how "ln") (= how "rn") (= how "rz"))) (do (err-write "nl: -n takes ln, rn or rz\n") (exit-status 1)))
+          ((not (and (whole width) (whole start) (whole incr) (> (number width) 0)))
+           (do (err-write "nl: -w, -v and -i take whole numbers\n") (exit-status 1)))
+          (else
+            (let ((src (if (or (= (length files) 0) (= (nth files 0) "-")) "-" (file-open (nth files 0))))
+                  (re (if (= (byte-sub body 0 1) "p") (re-compile (byte-sub body 1)) 0))
+                  (w (number width))
+                  (blank (pad "" (number width) " ")))
+              (cond ((and (= (type-of src) "string") (not (= src "-")))
+                     (do (err-write "nl: " (nth files 0) ": " src "\n") (exit-status 1)))
+                    ((= (type-of re) "string") (do (err-write "nl: " re "\n") (exit-status 1)))
+                    (else
+                      (iterate
+                        (fn (n)
+                          (let ((l (if (= (type-of src) "string") (in-line) (file-line src))))
+                            (if (is-nil l) (list)
+                              (let ((text (if (= (byte-at l (- (byte-len l) 1)) 10) (byte-sub l 0 (- (byte-len l) 1)) l)))
+                                (if (cond ((= body "a") #t)
+                                          ((= body "t") (> (byte-len text) 0))
+                                          ((= body "n") #f)
+                                          (else (not (is-nil (re-match re text)))))
+                                  (do (out-write (number-text n how w) sep l) (+ n (number incr)))
+                                  (do (out-write blank sep l) n))))))
+                        (number start)))))))))

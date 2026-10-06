@@ -1,0 +1,10 @@
+; What this machine is, in rows that fit.
+
+(def rows
+  (fn ()
+    (list
+      (tuple "rocchetto" VERSION)
+      (tuple "user" USER)
+      (tuple "cells" (str-fmt "%d x %d" W H))
+      (tuple "home" (str-fmt "%d files" (entry-count HOME)))
+      (tuple "bin" (str-fmt "%d files" (entry-count "/bin"))))))

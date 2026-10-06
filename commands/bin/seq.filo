@@ -1,0 +1,16 @@
+; seq [first [step]] last: the numbers from first (1) to last, step (1)
+; apart, one a line; a negative step counts down.
+(def floor-of (fn (x) (- x (% x 1))))
+
+(let ((n (length ARGS))
+      (nums (map number ARGS))
+      (first (if (> n 1) (nth nums 0) 1))
+      (step (if (> n 2) (nth nums 1) 1))
+      (last (nth nums (- n 1))))
+  (cond
+    ((= n 0) (echo "usage: seq [<first> [<step>]] <last>"))
+    ((= step 0) (echo "seq: the step cannot be 0"))
+    (else
+      (let ((count (+ (floor-of (/ (- last first) step)) 1)))
+        (if (> count 0)
+          (map (fn (i) (echo (string (+ first (* i step))))) (range count)))))))

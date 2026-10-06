@@ -1,0 +1,54 @@
+; cmp [-l | -s] file1 file2: where two files (- for the input) first
+; differ, byte and line from 1, or "EOF on" the one that ends first; -l
+; every differing byte (number, then the two in octal), -s nothing. Status:
+; 0 the same, 1 they differ, 2 one could not be read.
+
+(def usage "usage: cmp [-l | -s] file1 file2")
+(def has (fn (opts letter) (> (length (filter (fn (o) (letv (l val) o (= l letter))) opts)) 0)))
+(def is-stdin (fn (src) (and (= (type-of src) "string") (= src "-"))))
+(def opened (fn (name) (if (= name "-") "-" (file-open name))))
+(def next-bytes (fn (src n) (let ((b (if (is-stdin src) (in-read n) (file-read src n)))) (if (is-nil b) "" b))))
+(def newlines (fn (s) (- (length (str-split "\n" s)) 1)))
+(def octal (fn (b) (let ((t (int-text b 8))) (str-concat (str-join "" (map (fn (i) " ") (range 0 (- 3 (byte-len t))))) t))))
+(def wide (fn (n w) (let ((t (int-text n))) (str-concat (str-join "" (map (fn (i) " ") (range 0 (math-max 0 (- w (byte-len t)))))) t))))
+
+; the first index where two pieces differ, within the shorter
+(def first-diff (fn (a b)
+  (iterate (fn (i) (if (or (>= i (math-min (byte-len a) (byte-len b))) (not (= (byte-at a i) (byte-at b i)))) (list) (+ i 1))) 0)))
+
+(letv (opts files bad) (getopt ARGS "ls")
+  (let ((list-all (has opts "l")) (quiet (has opts "s")))
+    (cond ((not (= bad "")) (do (err-write "cmp: bad option -" bad "\n" usage "\n") (exit-status 2)))
+          ((not (= (length files) 2)) (do (err-write usage "\n") (exit-status 2)))
+          (else
+            (let ((a (opened (nth files 0))) (b (opened (nth files 1))))
+              (cond ((and (= (type-of a) "string") (not (is-stdin a))) (do (if quiet #f (err-write "cmp: " (nth files 0) ": " a "\n")) (exit-status 2)))
+                    ((and (= (type-of b) "string") (not (is-stdin b))) (do (if quiet #f (err-write "cmp: " (nth files 1) ": " b "\n")) (exit-status 2)))
+                    (else
+                      ; (offset line differs done): offset of the pieces read so far
+                      (letv (off line differs done)
+                            (iterate (fn (st)
+                                       (letv (off line differs done) st
+                                         (if done (list)
+                                           (let ((x (next-bytes a 4096)) (y (next-bytes b 4096)))
+                                             (cond ((and (= x "") (= y "")) (tuple off line differs #t))
+                                                   ((= x y) (tuple (+ off (byte-len x)) (+ line (newlines x)) differs #f))
+                                                   (else
+                                                     (let ((i (first-diff x y)))
+                                                       (cond ((and (< i (byte-len x)) (< i (byte-len y)))
+                                                              (if list-all
+                                                                (do (map (fn (k) (if (= (byte-at x k) (byte-at y k)) #f
+                                                                                   (out-write (wide (+ off k 1) 6) " " (octal (byte-at x k)) " " (octal (byte-at y k)) "\n")))
+                                                                         (range i (math-min (byte-len x) (byte-len y))))
+                                                                    (if (= (byte-len x) (byte-len y)) (tuple (+ off (byte-len x)) line #t #f)
+                                                                      (do (err-write "cmp: EOF on " (nth files (if (< (byte-len x) (byte-len y)) 0 1)) "\n")
+                                                                          (tuple off line #t #t))))
+                                                                (do (if quiet #f
+                                                                      (out-write (nth files 0) " " (nth files 1) " differ: char " (int-text (+ off i 1))
+                                                                                 ", line " (int-text (+ line (newlines (byte-sub x 0 i)))) "\n"))
+                                                                    (tuple off line #t #t))))
+                                                             (else
+                                                               (do (if quiet #f (err-write "cmp: EOF on " (nth files (if (< (byte-len x) (byte-len y)) 0 1)) "\n"))
+                                                                   (tuple off line #t #t)))))))))))
+                                     (tuple 0 1 #f #f))
+                        (exit-status (if differs 1 0))))))))))

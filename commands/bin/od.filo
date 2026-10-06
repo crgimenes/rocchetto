@@ -1,0 +1,141 @@
+; od [-v] [-A d|o|x|n] [-j skip] [-N count] [-t type]... [-bcdox] [file...]:
+; the bytes of the files (or the input), one after another, 16 to a line,
+; in each type asked: a (named characters), c (characters, C escapes, the
+; rest in octal), d, o, u, x with a size of 1, 2 or 4 (or C, S, I; 4 when
+; none), little-endian. -A the address radix (o), -j bytes to skip, -N at
+; most this many, -v every line (else a line like the one before is *).
+; -b -c -d -o -x are o1, c, u2, o2, x2. The layout is macOS's.
+
+(def usage "usage: od [-v] [-A d|o|x|n] [-j skip] [-N count] [-t type]... [-bcdox] [file...]")
+(def opt (fn (opts letter default) (fold (fn (v o) (letv (l val) o (if (= l letter) val v))) default opts)))
+(def has (fn (opts letter) (> (length (filter (fn (o) (letv (l val) o (= l letter))) opts)) 0)))
+(def whole (re-compile "^[0-9][0-9]*$"))
+
+(def spaces (fn (n) (str-join "" (map (fn (i) " ") (range 0 (math-max 0 n))))))
+(def lpad (fn (s width c) (str-concat (str-join "" (map (fn (i) c) (range 0 (math-max 0 (- width (byte-len s)))))) s)))
+
+; the types of -t specs and the old letters, as (kind size) tuples
+(def parse-types (fn (spec)
+  (letv (out i bad)
+        (iterate (fn (st)
+                   (letv (out i bad) st
+                     (if (or bad (>= i (byte-len spec))) (list)
+                       (let ((k (byte-sub spec i (+ i 1))) (n (byte-sub spec (+ i 1) (+ i 2))))
+                         (cond ((or (= k "a") (= k "c")) (tuple (list-append out (tuple k 1)) (+ i 1) #f))
+                               ((or (= k "d") (= k "o") (= k "u") (= k "x"))
+                                (cond ((or (= n "1") (= n "C")) (tuple (list-append out (tuple k 1)) (+ i 2) #f))
+                                      ((or (= n "2") (= n "S")) (tuple (list-append out (tuple k 2)) (+ i 2) #f))
+                                      ((or (= n "4") (= n "I")) (tuple (list-append out (tuple k 4)) (+ i 2) #f))
+                                      ((or (= n "") (is-nil (re-match whole n))) (tuple (list-append out (tuple k 4)) (+ i 1) #f))
+                                      (else (tuple out i #t))))
+                               (else (tuple out i #t)))))))
+                 (tuple (list) 0 #f))
+    (if bad (list) out))))
+
+(def names (list "nul" "soh" "stx" "etx" "eot" "enq" "ack" "bel" "bs" "ht" "nl" "vt" "ff" "cr" "so" "si"
+                 "dle" "dc1" "dc2" "dc3" "dc4" "nak" "syn" "etb" "can" "em" "sub" "esc" "fs" "gs" "rs" "us"))
+(def escapes (list (tuple 0 "\\0") (tuple 7 "\\a") (tuple 8 "\\b") (tuple 12 "\\f") (tuple 10 "\\n")
+                   (tuple 13 "\\r") (tuple 9 "\\t") (tuple 11 "\\v")))
+
+(def char-text (fn (b)
+  (let ((e (filter (fn (p) (letv (v s) p (= v b))) escapes)))
+    (cond ((> (length e) 0) (letv (v s) (nth e 0) s))
+          ((and (>= b 32) (< b 127)) (bytes b))
+          (else (lpad (int-text b 8) 3 "0"))))))
+(def named-text (fn (b)
+  (cond ((< b 32) (nth names b))
+        ((= b 32) "sp")
+        ((= b 127) "del")
+        ((> b 127) (lpad (int-text b 16) 2 "0"))
+        (else (bytes b)))))
+
+; a value of size bytes from little-endian bytes
+(def value (fn (bs) (fold (fn (v i) (+ (* v 256) (nth bs i))) 0 (reverse (range 0 (length bs))))))
+(def value-of (fn (bs) (fold (fn (v b) (+ (* v 256) b)) 0 (reverse bs))))
+
+(def field-text (fn (kind size v)
+  (cond ((= kind "c") (char-text v))
+        ((= kind "a") (named-text v))
+        ((= kind "o") (lpad (int-text v 8) (cond ((= size 1) 3) ((= size 2) 6) (else 11)) "0"))
+        ((= kind "x") (lpad (int-text v 16) (* 2 size) "0"))
+        ((= kind "u") (int-text v))
+        (else (let ((top (pow 2 (- (* 8 size) 1))))
+                (int-text (if (>= v top) (- v (* 2 top)) v)))))))
+
+(def width-of (fn (size) (cond ((= size 1) 4) ((= size 2) 8) (else 16))))
+
+; one line of chunk (up to 16 bytes) in one type, after its 7-column head
+(def type-line (fn (head chunk ty)
+  (letv (kind size) ty
+    (let ((bs (byte-list chunk)) (w (width-of size)) (prefix (if (or (= kind "a") (= kind "c")) " " "  ")))
+      (let ((padded (list-concat bs (map (fn (i) 0) (range 0 (- (* size (ceil (/ (length bs) size))) (length bs)))))))
+        (let ((vals (map (fn (g) (value-of (map (fn (i) (nth padded (+ (* g size) i))) (range 0 size))))
+                         (range 0 (/ (length padded) size)))))
+          (out-write head prefix
+                     (str-join "" (map (fn (v) (lpad (field-text kind size v) w " ")) vals))
+                     (spaces (* w (- (/ 16 size) (length vals))))
+                     "\n")))))))
+
+(def address (fn (radix n)
+  (cond ((= radix "n") "")
+        ((= radix "d") (lpad (int-text n) 7 "0"))
+        ((= radix "x") (lpad (int-text n 16) 7 "0"))
+        (else (lpad (int-text n 8) 7 "0")))))
+
+; the input: the files one after another (the input when none), read a
+; piece at a time; (pending sources handle) -> 16 bytes when there are
+(def opened (fn (name) (if (= name "-") "-" (file-open name))))
+(def read-from (fn (h) (if (and (= (type-of h) "string") (= h "-")) (in-read 1024) (file-read h 1024))))
+
+; more input into pending until 16 bytes or none left: (pending names h status)
+(def refill (fn (st)
+  (iterate (fn (st)
+             (letv (pending names h status) st
+               (cond ((>= (byte-len pending) 16) (list))
+                     ((is-nil h)
+                      (if (= (length names) 0) (list)
+                        (let ((nh (opened (nth names 0))))
+                          (if (and (= (type-of nh) "string") (not (= nh "-")))
+                            (do (err-write "od: " (nth names 0) ": " nh "\n") (tuple pending (tail names) (list) 1))
+                            (tuple pending (tail names) nh status)))))
+                     (else (let ((b (read-from h)))
+                             (if (is-nil b) (tuple pending names (list) status)
+                               (tuple (str-concat pending b) names h status)))))))
+           st)))
+
+(letv (opts files bad) (getopt ARGS "vA:j:N:t:bcdox")
+  (let ((radix (opt opts "A" "o")) (skip (opt opts "j" "0")) (count (opt opts "N" ""))
+        (spec (str-join "" (map (fn (o) (letv (l val) o
+                                          (cond ((= l "t") val) ((= l "b") "o1") ((= l "c") "c") ((= l "d") "u2")
+                                                ((= l "o") "o2") ((= l "x") "x2") (else ""))))
+                                opts))))
+    (let ((types (parse-types (if (= spec "") "o2" spec))))
+      (cond ((not (= bad "")) (do (err-write "od: bad option -" bad "\n" usage "\n") (exit-status 1)))
+            ((not (or (= radix "o") (= radix "d") (= radix "x") (= radix "n")))
+             (do (err-write "od: -A takes d, o, x or n\n") (exit-status 1)))
+            ((or (is-nil (re-match whole skip)) (and (not (= count "")) (is-nil (re-match whole count))))
+             (do (err-write "od: -j and -N take a number of bytes\n") (exit-status 1)))
+            ((= (length types) 0) (do (err-write "od: -t takes a, c, and d, o, u, x with 1, 2, 4, C, S or I\n") (exit-status 1)))
+            (else
+              (let ((every (has opts "v")) (limit (if (= count "") -1 (number count))))
+                ; (pending names h status offset skip-left left prev starred)
+                (letv (pending names h status offset sk left prev starred done)
+                      (iterate
+                        (fn (st)
+                          (letv (pending names h status offset sk left prev starred done) st
+                            (if done (list)
+                            (letv (p2 n2 h2 s2) (refill (tuple pending names h status))
+                              (let ((drop (math-min sk (byte-len p2))))
+                                (if (> drop 0) (tuple (byte-sub p2 drop) n2 h2 s2 (+ offset drop) (- sk drop) left prev starred #f)
+                                  (let ((take (if (< left 0) (math-min 16 (byte-len p2)) (math-min 16 (byte-len p2) left))))
+                                    (if (= take 0) (tuple p2 n2 h2 s2 offset sk left prev starred #t)
+                                      (let ((chunk (byte-sub p2 0 take)))
+                                        (if (and (not every) (= take 16) (= chunk prev))
+                                          (do (if starred #f (out-write "*\n"))
+                                              (tuple (byte-sub p2 take) n2 h2 s2 (+ offset take) 0 (if (< left 0) left (- left take)) prev #t #f))
+                                          (do (map (fn (i) (type-line (if (= i 0) (if (= radix "n") (spaces 7) (address radix offset)) (spaces 7))
+                                                                      chunk (nth types i)))
+                                                   (range 0 (length types)))
+                                              (tuple (byte-sub p2 take) n2 h2 s2 (+ offset take) 0 (if (< left 0) left (- left take)) chunk #f #f))))))))))))
+                        (tuple "" (if (= (length files) 0) (list "-") files) (list) 0 0 (number skip) limit "" #f #f))
+                  (do (out-write (address radix offset) "\n") (exit-status status)))))))))

@@ -1,0 +1,91 @@
+; tail [-n [+]count | -c [+]bytes] [file...]: the last lines (10) or bytes
+; of each file, or of the input (- or none); +count starts at that line or
+; byte instead, counting from 1. With more than one file each comes after a
+; ==> name <== line. -f (follow) is not here: a file here does not grow
+; while a command reads it.
+
+(def usage "usage: tail [-n [+]count | -c [+]bytes] [file...]")
+(def opt (fn (opts letter default) (fold (fn (v o) (letv (l val) o (if (= l letter) val v))) default opts)))
+(def whole (re-compile "^[+-]*[0-9][0-9]*$"))
+(def is-stdin (fn (src) (and (= (type-of src) "string") (= src "-"))))
+(def opened (fn (name) (if (= name "-") "-" (file-open name))))
+(def next-line (fn (src) (if (is-stdin src) (in-line) (file-line src))))
+(def next-bytes (fn (src n) (if (is-stdin src) (in-read n) (file-read src n))))
+
+; -5 and +5, the old way, are -n 5 and -n +5
+(def old (re-compile "^[+-][0-9][0-9]*$"))
+(def args (if (and (> (length ARGS) 0) (not (is-nil (re-match old (nth ARGS 0)))))
+            (list-concat (list "-n" (let ((a (nth ARGS 0))) (if (= (byte-sub a 0 1) "+") a (byte-sub a 1)))) (tail ARGS))
+            ARGS))
+
+(def from-start (fn (spec) (= (byte-sub spec 0 1) "+")))
+(def amount (fn (spec) (number (if (or (= (byte-sub spec 0 1) "+") (= (byte-sub spec 0 1) "-")) (byte-sub spec 1) spec))))
+
+; how many newlines s has, and the byte just past the d-th of them
+(def newlines (fn (s)
+  (letv (from k)
+        (iterate (fn (st) (letv (from k) st (let ((i (byte-find s "\n" from))) (if (< i 0) (list) (tuple (+ i 1) (+ k 1))))))
+                 (tuple 0 0))
+    k)))
+(def past-nth (fn (s d)
+  (letv (from k)
+        (iterate (fn (st) (letv (from k) st (if (= k d) (list) (tuple (+ (byte-find s "\n" from) 1) (+ k 1)))))
+                 (tuple 0 0))
+    from)))
+
+; the last n lines: the input a block at a time, cut after each to its last
+; n whole lines and the one still open (a list of lines, or a window
+; copied for each, would not fit a large input)
+(def last-lines (fn (src n)
+  (letv (kept whole)
+        (iterate (fn (st)
+                   (letv (buf c) st
+                     (let ((b (next-bytes src 65536)))
+                       (if (is-nil b) (list)
+                         (let ((text (str-concat buf b)) (total (+ c (newlines b))))
+                           (if (> total n) (tuple (byte-sub text (past-nth text (- total n))) n) (tuple text total)))))))
+                 (tuple "" 0))
+    (let ((open (and (> (byte-len kept) 0) (not (= (byte-at kept (- (byte-len kept) 1)) 10)))))
+      (out-write (cond ((and open (= n 0)) "")
+                       ((and open (>= whole n)) (byte-sub kept (past-nth kept 1)))
+                       (else kept)))))))
+
+; from line n on (1 is the first)
+(def lines-from (fn (src n)
+  (iterate (fn (k)
+             (let ((l (next-line src)))
+               (if (is-nil l) (list) (do (if (>= k n) (out-write l) #f) (+ k 1)))))
+           1)))
+
+; the bytes: all of them read, the last n (or from byte n) written
+(def all-bytes (fn (src)
+  (str-join "" (iterate (fn (acc) (let ((b (next-bytes src 65536))) (if (is-nil b) (list) (list-append acc b)))) (list)))))
+(def some-bytes (fn (src spec)
+  (let ((b (all-bytes src)) (n (amount spec)))
+    (out-write (if (from-start spec)
+                 (byte-sub b (math-min (byte-len b) (math-max 0 (- n 1))))
+                 (byte-sub b (math-max 0 (- (byte-len b) n))))))))
+
+(letv (opts files bad) (getopt args "n:c:f")
+  (let ((count (opt opts "n" "10")) (bytes (opt opts "c" "")))
+    (cond ((not (= bad "")) (do (err-write "tail: bad option -" bad "\n" usage "\n") (exit-status 1)))
+          ((> (length (filter (fn (o) (letv (l v) o (= l "f"))) opts)) 0)
+           (do (err-write "tail: -f is not supported here (files do not grow while read)\n") (exit-status 1)))
+          ((or (is-nil (re-match whole count)) (and (not (= bytes "")) (is-nil (re-match whole bytes))))
+           (do (err-write "tail: the count is a number\n") (exit-status 1)))
+          (else
+            (let ((names (if (= (length files) 0) (list "-") files)) (many (> (length files) 1)))
+              (letv (st shown)
+                    (fold (fn (acc name)
+                            (letv (st shown) acc
+                              (let ((src (opened name)))
+                                (if (and (= (type-of src) "string") (not (is-stdin src)))
+                                  (do (err-write "tail: " name ": " src "\n") (tuple 1 shown))
+                                  (do (if many (out-write (if (> shown 0) "\n" "") "==> " name " <==\n") #f)
+                                      (cond ((not (= bytes "")) (some-bytes src bytes))
+                                            ((from-start count) (lines-from src (amount count)))
+                                            (else (last-lines src (amount count))))
+                                      (if (is-stdin src) #f (file-close src))
+                                      (tuple st (+ shown 1)))))))
+                          (tuple 0 0) names)
+                (exit-status st)))))))

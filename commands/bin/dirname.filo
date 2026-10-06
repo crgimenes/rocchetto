@@ -1,0 +1,19 @@
+; dirname path: all of a path but its last part, as POSIX's: "." when
+; there is no slash, "/" for what hangs from the root.
+(def trim-slashes
+  (fn (s)
+    (let ((n (str-len s)))
+      (if (and (> n 1) (= (str-sub s (- n 1)) "/"))
+        (trim-slashes (str-sub s 0 (- n 1)))
+        s))))
+
+(if (= (length ARGS) 0)
+  (echo "usage: dirname <path>")
+  (let ((p (trim-slashes (nth ARGS 0)))
+        (parts (str-split "/" p)))
+    (cond
+      ((= p "/") (echo "/"))
+      ((= (length parts) 1) (echo "."))
+      (else
+        (let ((dir (trim-slashes (str-join "/" (reverse (tail (reverse parts)))))))
+          (echo (if (= dir "") "/" dir)))))))

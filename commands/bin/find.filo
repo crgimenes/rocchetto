@@ -1,0 +1,249 @@
+; find [-H|-L] path... [expression]: the files under each path, each one
+; tested against the expression and, when it gives no action, printed when
+; it holds. Primaries: -name pattern and -path pattern (the shell's * ? [...]),
+; -type f|d|l, -size [+-]n[c] (512-byte blocks, or bytes), -mtime [+-]n
+; (days), -newer file, -prune, -print, -depth, -exec utility [arg...] ;
+; and -exec utility [arg...] {} + ({} the path); ! ( ) -a -o join them.
+; A store that keeps no times has files no -mtime or -newer holds for. -L
+; follows every link, -H those given; a directory inside itself is said
+; and not entered (where the store tells files apart), and 64 levels at
+; most. Directories in byte order. Status 1 when a path
+; could not be read or an -exec ... + run failed.
+
+(def usage "usage: find [-H | -L] path... [expression]")
+(def maxdepth 64)
+; the shell's line a run is joined into (SH_LINE_MAX, with room to spare)
+(def line-max 1000)
+(def whole (re-compile "^[0-9][0-9]*$"))
+; [+-]n, and nc too when c-ok
+(def unsigned (fn (s) (if (and (> (byte-len s) 0) (or (= (byte-sub s 0 1) "+") (= (byte-sub s 0 1) "-"))) (byte-sub s 1) s)))
+(def number-arg (fn (s c-ok)
+  (let ((u (unsigned s)))
+    (let ((d (if (and c-ok (> (byte-len u) 1) (= (byte-sub u (- (byte-len u) 1)) "c")) (byte-sub u 0 (- (byte-len u) 1)) u)))
+      (not (is-nil (re-match whole d)))))))
+
+(def first-of (fn (l) (if (= (length l) 0) "" (nth l 0))))
+(def base (fn (p)
+  (let ((parts (filter (fn (s) (> (byte-len s) 0)) (str-split "/" p))))
+    (if (= (length parts) 0) (if (= p "") "" "/") (nth parts (- (length parts) 1))))))
+(def join (fn (dir name)
+  (if (and (> (byte-len dir) 0) (= (byte-at dir (- (byte-len dir) 1)) 47)) (str-concat dir name) (str-concat dir "/" name))))
+(def kind-letter (fn (k) (cond ((= k "dir") "d") ((= k "link") "l") (else "f"))))
+
+; a word's length quoted as sh_join does it, and a line's
+(def plain-byte (fn (b) (or (>= b 128) (and (>= b 97) (<= b 122)) (and (>= b 65) (<= b 90)) (and (>= b 48) (<= b 57))
+                            (> (length (filter (fn (c) (= c b)) (byte-list "_-./~:=+@%,^"))) 0))))
+(def quoted-len (fn (w)
+  (let ((bs (byte-list w)))
+    (if (and (> (length bs) 0) (= (length (filter (fn (b) (not (plain-byte b))) bs)) 0)) (length bs)
+      (+ 2 (length bs) (* 3 (length (filter (fn (b) (= b 39)) bs))))))))
+(def line-len (fn (words) (fold (fn (n w) (+ n 1 (quoted-len w))) 0 words)))
+
+; ---- the expression, read into (op a b) nodes: (node rest error) ----
+
+(def needs-arg (fn (p rest) (tuple (tuple "true" 0 0) rest (str-concat "find: " p ": requires additional arguments"))))
+
+; -exec's words up to ; or {} +: (words plus rest) or #f when unended
+(def exec-words (fn (ts)
+  (letv (words rest found plus)
+        (iterate (fn (st)
+                   (letv (words rest found plus) st
+                     (cond (found (list))
+                           ((= (length rest) 0) (list))
+                           ((= (nth rest 0) ";") (tuple words (tail rest) #t #f))
+                           ((and (= (nth rest 0) "+") (> (length words) 1) (= (nth words (- (length words) 1)) "{}"))
+                            (tuple (map (fn (i) (nth words i)) (range 0 (- (length words) 1))) (tail rest) #t #t))
+                           (else (tuple (list-append words (nth rest 0)) (tail rest) #f #f)))))
+                 (tuple (list) ts #f #f))
+    (if (and found (> (length words) 0)) (tuple words plus rest) #f))))
+
+(def primary (fn (ts)
+  (let ((p (nth ts 0)) (rest (tail ts)) (arg (first-of (tail ts))))
+    (cond ((or (= p "-name") (= p "-path"))
+           (if (= (length rest) 0) (needs-arg p rest) (tuple (tuple (byte-sub p 1) arg 0) (tail rest) "")))
+          ((= p "-type")
+           (cond ((= (length rest) 0) (needs-arg p rest))
+                 ((= (length (filter (fn (c) (= c arg)) (list "f" "d" "l" "b" "c" "p" "s"))) 0)
+                  (tuple (tuple "true" 0 0) rest (str-concat "find: -type: " arg ": unknown type")))
+                 (else (tuple (tuple "type" arg 0) (tail rest) ""))))
+          ((= p "-size")
+           (cond ((= (length rest) 0) (needs-arg p rest))
+                 ((not (number-arg arg #t)) (tuple (tuple "true" 0 0) rest (str-concat "find: -size: " arg ": illegal size")))
+                 (else (tuple (tuple "size" arg 0) (tail rest) ""))))
+          ((= p "-mtime")
+           (cond ((= (length rest) 0) (needs-arg p rest))
+                 ((not (number-arg arg #f)) (tuple (tuple "true" 0 0) rest (str-concat "find: -mtime: " arg ": illegal time")))
+                 (else (tuple (tuple "mtime" arg 0) (tail rest) ""))))
+          ((= p "-newer")
+           (if (= (length rest) 0) (needs-arg p rest)
+             (let ((s (file-stat arg #t)))
+               (if (is-nil s) (tuple (tuple "true" 0 0) rest (str-concat "find: " arg ": No such file or directory"))
+                 (letv (k z t o) s (tuple (tuple "newer" (if (is-nil t) -1 t) 0) (tail rest) ""))))))
+          ((= p "-prune") (tuple (tuple "prune" 0 0) rest ""))
+          ((= p "-print") (tuple (tuple "print" 0 0) rest ""))
+          ((= p "-depth") (tuple (tuple "true" 0 0) rest ""))
+          ((= p "-exec")
+           (let ((ex (exec-words rest)))
+             (if (and (= (type-of ex) "bool") (not ex))
+               (tuple (tuple "true" 0 0) rest "find: -exec: no terminating \";\" or \"+\"")
+               (letv (words plus r2) ex
+                 (if plus (tuple (tuple "exec+" words (length ts)) r2 "") (tuple (tuple "exec" words 0) r2 ""))))))
+          (else (tuple (tuple "true" 0 0) rest (str-concat "find: " p ": unknown primary or operator")))))))
+
+; level 0 -o, 1 -a (or nothing between), 2 ! ( ) and the primaries
+(def parse (fn (ts level)
+  (cond ((= level 0)
+         (iterate (fn (st)
+                    (letv (a rest err) st
+                      (if (or (not (= err "")) (not (= (first-of rest) "-o"))) (list)
+                        (letv (b r2 e2) (parse (tail rest) 1) (tuple (tuple "or" a b) r2 e2)))))
+                  (parse ts 1)))
+        ((= level 1)
+         (iterate (fn (st)
+                    (letv (a rest err) st
+                      (let ((t (first-of rest)))
+                        (if (or (not (= err "")) (= (length rest) 0) (= t "-o") (= t ")")) (list)
+                          (letv (b r2 e2) (parse (if (= t "-a") (tail rest) rest) 2) (tuple (tuple "and" a b) r2 e2))))))
+                  (parse ts 2)))
+        ((= (length ts) 0) (tuple (tuple "true" 0 0) ts "find: an expression ends too soon"))
+        ((= (nth ts 0) "!") (letv (a r e) (parse (tail ts) 2) (tuple (tuple "not" a 0) r e)))
+        ((= (nth ts 0) "(")
+         (letv (a r e) (parse (tail ts) 0)
+           (cond ((not (= e "")) (tuple a r e))
+                 ((= (first-of r) ")") (tuple a (tail r) ""))
+                 (else (tuple a r "find: ( without )")))))
+        ((or (= (nth ts 0) ")") (= (nth ts 0) "-a") (= (nth ts 0) "-o"))
+         (tuple (tuple "true" 0 0) ts (str-concat "find: " (nth ts 0) ": nothing before it")))
+        (else (primary ts)))))
+
+; ---- running -exec ... + : (idx words path) entries gathered, then run ----
+
+(def run-batch (fn (words paths)
+  (letv (st o e) (run (list-concat words paths))
+    (do (out-write o) (err-write e) st))))
+
+; the paths of one -exec ... +, as many to a run as the line has room for
+(def run-plus (fn (words paths)
+  (letv (status cur)
+        (fold (fn (s p)
+                (letv (status cur) s
+                  (if (and (> (length cur) 0) (> (line-len (list-concat words (list-append cur p))) line-max))
+                    (tuple (if (= (run-batch words cur) 0) status 1) (list p))
+                    (tuple status (list-append cur p)))))
+              (tuple 0 (list)) paths)
+    (if (= (length cur) 0) status (if (= (run-batch words cur) 0) status 1)))))
+
+(def flush (fn (plus status)
+  (let ((ids (fold (fn (ids x) (letv (i w p) x (if (> (length (filter (fn (j) (= j i)) ids)) 0) ids (list-append ids i))))
+                   (list) plus)))
+    (fold (fn (status i)
+            (let ((mine (filter (fn (x) (letv (j w p) x (= j i))) plus)))
+              (letv (j words p0) (nth mine 0)
+                (if (= (run-plus words (map (fn (x) (letv (j w p) x p)) mine)) 0) status 1))))
+          status ids))))
+
+; ---- one file against the expression: (holds st), st (pruned plus status) ----
+
+(def cmp-num (fn (spec v)
+  (let ((c (byte-sub spec 0 1)))
+    (cond ((= c "+") (> v (number (byte-sub spec 1))))
+          ((= c "-") (< v (number (byte-sub spec 1))))
+          (else (= v (number spec)))))))
+
+(def ev (fn (node e st now)
+  (letv (op a b) node
+    (letv (path k z t) e
+      (cond ((= op "and") (letv (r s2) (ev a e st now) (if r (ev b e s2 now) (tuple #f s2))))
+            ((= op "or") (letv (r s2) (ev a e st now) (if r (tuple #t s2) (ev b e s2 now))))
+            ((= op "not") (letv (r s2) (ev a e st now) (tuple (not r) s2)))
+            ((= op "true") (tuple #t st))
+            ((= op "name") (tuple (glob-match a (base path)) st))
+            ((= op "path") (tuple (glob-match a path) st))
+            ((= op "type") (tuple (= a (kind-letter k)) st))
+            ((= op "size")
+             (let ((bytes (= (byte-sub a (- (byte-len a) 1)) "c")) (n (if (is-nil z) 0 z)))
+               (tuple (cmp-num (if bytes (byte-sub a 0 (- (byte-len a) 1)) a) (if bytes n (ceil (/ n 512)))) st)))
+            ((= op "mtime")
+             (tuple (and (not (is-nil t)) (not (is-nil now)) (cmp-num a (floor (/ (- now t) 86400)))) st))
+            ((= op "newer") (tuple (and (not (is-nil t)) (>= a 0) (> t a)) st))
+            ((= op "prune") (letv (pr plus status) st (tuple #t (tuple #t plus status))))
+            ((= op "print") (do (out-write path "\n") (tuple #t st)))
+            ((= op "exec")
+             (letv (rs o er) (run (map (fn (w) (str-replace "{}" path w)) a))
+               (do (out-write o) (err-write er) (tuple (= rs 0) st))))
+            (else
+              (letv (pr plus status) st
+                (let ((more (list-append plus (tuple b a path))))
+                  (if (>= (length more) 64) (tuple #t (tuple pr (list) (flush more status)))
+                    (tuple #t (tuple pr more status)))))))))))
+
+(def has-action (fn (ts) (> (length (filter (fn (x) (or (= x "-print") (= x "-exec"))) ts)) 0)))
+
+; ---- the walk: a stack of (path depth post top ids), ids those of the
+; directories above when links are followed ----
+
+(def children (fn (dir depth ids)
+  (letv (out next)
+        (iterate (fn (st)
+                   (letv (out next) st
+                     (if (is-nil next) (list)
+                       (letv (entries nx) (dir-read dir next)
+                         (tuple (list-concat out (map (fn (en) (letv (name kind) en (tuple (join dir name) depth #f #f ids))) entries)) nx)))))
+                 (tuple (list) 0))
+    out)))
+
+(def lead (fn (args)
+  (iterate (fn (st)
+             (letv (mode rest) st
+               (let ((a (first-of rest)))
+                 (cond ((or (= a "-H") (= a "-L") (= a "-P")) (tuple a (tail rest)))
+                       ((= a "--") (tuple mode (tail rest)))
+                       (else (list))))))
+           (tuple "-P" args))))
+
+(def is-expr-start (fn (a) (or (= a "!") (= a "(") (and (> (byte-len a) 1) (= (byte-sub a 0 1) "-")))))
+
+(letv (mode rest) (lead ARGS)
+  (letv (paths ts) (fold (fn (st a) (letv (ps ts) st (if (or (> (length ts) 0) (is-expr-start a)) (tuple ps (list-append ts a)) (tuple (list-append ps a) ts))))
+                         (tuple (list) (list)) rest)
+    (letv (tree left err) (if (= (length ts) 0) (tuple (tuple "print" 0 0) ts "") (parse ts 0))
+      (cond ((= (length paths) 0) (do (err-write usage "\n") (exit-status 1)))
+            ((not (= err "")) (do (err-write err "\n") (exit-status 1)))
+            ((> (length left) 0) (do (err-write "find: " (nth left 0) ": unexpected\n") (exit-status 1)))
+            (else
+              (let ((expr (if (or (= (length ts) 0) (has-action ts)) tree (tuple "and" tree (tuple "print" 0 0))))
+                    (post-order (> (length (filter (fn (x) (= x "-depth")) ts)) 0))
+                    (clock (now)))
+                (letv (stack plus status)
+                      (iterate
+                        (fn (w)
+                          (letv (stack plus status) w
+                            (if (= (length stack) 0) (list)
+                              (letv (path depth post top ids) (nth stack 0)
+                                (let ((follow (or (= mode "-L") (and top (= mode "-H"))))
+                                      (others (tail stack)))
+                                  (let ((s0 (file-stat path follow)))
+                                    (let ((s (if (and (is-nil s0) follow) (file-stat path #f) s0)))
+                                      (if (is-nil s)
+                                        (do (err-write "find: " path ": No such file or directory\n") (tuple others plus 1))
+                                        (letv (k z t o) s
+                                          (let ((e (tuple path k z t))
+                                                (descend (and (= k "dir") (not post)))
+                                                (id (if (and follow (= k "dir") (not post)) (file-id path #t) (list))))
+                                            (let ((below (if (is-nil id) ids (list-append ids id))))
+                                            (cond ((and descend (not (is-nil id)) (> (length (filter (fn (x) (= x id)) ids)) 0))
+                                                   (do (err-write "find: " path ": directory causes a cycle\n") (tuple others plus 1)))
+                                                  ((and descend (>= depth maxdepth))
+                                                   (do (err-write "find: " path ": more than " maxdepth " levels (a link loop?)\n")
+                                                       (letv (r s2) (ev expr e (tuple #f plus status) clock)
+                                                         (letv (pr p2 st2) s2 (tuple others p2 1)))))
+                                                  ((and descend post-order)
+                                                   (tuple (list-concat (children path (+ depth 1) below) (list-concat (list (tuple path depth #t top ids)) others)) plus status))
+                                                  (else
+                                                    (letv (r s2) (ev expr e (tuple #f plus status) clock)
+                                                      (letv (pr p2 st2) s2
+                                                        (if (and descend (not pr))
+                                                          (tuple (list-concat (children path (+ depth 1) below) others) p2 st2)
+                                                          (tuple others p2 st2)))))))))))))))))
+                        (tuple (map (fn (p) (tuple p 0 #f #t (list))) paths) (list) 0))
+                  (exit-status (flush plus status)))))))))

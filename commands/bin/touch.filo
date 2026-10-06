@@ -1,0 +1,108 @@
+; touch [-cm] [-r ref | -t [[CC]YY]MMDDhhmm[.SS] | -d YYYY-MM-DDThh:mm:SS[Z]] file...:
+; each file made empty when it is not there (not with -c) and given the
+; time: now, ref's, or the one given (local time; Z after -d's is UTC). A
+; file keeps only when it was written: -a (access times) is not here, -m
+; is what touch always does.
+
+(def usage "usage: touch [-cm] [-r ref | -t [[CC]YY]MMDDhhmm[.SS] | -d YYYY-MM-DDThh:mm:SS[Z]] file...")
+(def opt (fn (opts letter default) (fold (fn (v o) (letv (l val) o (if (= l letter) val v))) default opts)))
+(def has (fn (opts letter) (> (length (filter (fn (o) (letv (l val) o (= l letter))) opts)) 0)))
+(def whole (re-compile "^[0-9][0-9]*$"))
+(def digits (fn (s) (and (> (byte-len s) 0) (not (is-nil (re-match whole s))))))
+(def num (fn (s a b) (number (byte-sub s a b))))
+
+; days since 1970-01-01 of a civil day (Howard Hinnant's days_from_civil)
+(def days-from-civil (fn (y m d)
+  (let ((y2 (if (<= m 2) (- y 1) y)))
+    (let ((era (floor (/ y2 400))))
+      (let ((yoe (- y2 (* era 400)))
+            (doy (+ (floor (/ (+ (* 153 (if (> m 2) (- m 3) (+ m 9))) 2) 5)) (- d 1))))
+        (+ (* era 146097) (* yoe 365) (floor (/ yoe 4)) (- 0 (floor (/ yoe 100))) doy -719468))))))
+
+(def leap (fn (y) (and (= (% y 4) 0) (or (not (= (% y 100) 0)) (= (% y 400) 0)))))
+(def month-days (fn (y m) (cond ((= m 2) (if (leap y) 29 28)) ((or (= m 4) (= m 6) (= m 9) (= m 11)) 30) (else 31))))
+
+; seconds since 1970 of a civil time, nil when a field is out of range;
+; offset is minutes east of UTC
+(def civil (fn (y mo d h mi s offset)
+  (if (or (< mo 1) (> mo 12) (< d 1) (> d (month-days y mo)) (> h 23) (> mi 59) (> s 60)) (list)
+    (- (+ (* (days-from-civil y mo d) 86400) (* h 3600) (* mi 60) s) (* offset 60)))))
+
+; -t [[CC]YY]MMDDhhmm[.SS]
+(def from-t (fn (spec tz this-year)
+  (let ((parts (str-split "." spec)))
+    (let ((main (nth parts 0)) (sec (if (> (length parts) 1) (nth parts 1) "0")))
+      (if (or (> (length parts) 2) (not (digits main)) (not (digits sec)) (> (byte-len sec) 2)
+              (not (or (= (byte-len main) 8) (= (byte-len main) 10) (= (byte-len main) 12))))
+        (list)
+        (let ((n (byte-len main)))
+          (let ((y (cond ((= n 12) (num main 0 4))
+                         ((= n 10) (let ((yy (num main 0 2))) (if (>= yy 69) (+ 1900 yy) (+ 2000 yy))))
+                         (else this-year)))
+                (rest (byte-sub main (- n 8))))
+            (civil y (num rest 0 2) (num rest 2 4) (num rest 4 6) (num rest 6 8) (number sec) tz))))))))
+
+; -d YYYY-MM-DDThh:mm:SS[.frac][Z], a space allowed for the T
+(def from-d (fn (spec tz)
+  (let ((utc (and (> (byte-len spec) 0) (= (byte-sub spec (- (byte-len spec) 1)) "Z"))))
+    (let ((body (if utc (byte-sub spec 0 (- (byte-len spec) 1)) spec)))
+      (let ((frac (math-min (let ((i (byte-find body "."))) (if (< i 0) (byte-len body) i))
+                            (let ((i (byte-find body ","))) (if (< i 0) (byte-len body) i)))))
+        (let ((t (byte-sub body 0 frac)))
+          (if (or (not (= (byte-len t) 19)) (not (= (byte-sub t 4 5) "-")) (not (= (byte-sub t 7 8) "-"))
+                  (not (or (= (byte-sub t 10 11) "T") (= (byte-sub t 10 11) " ")))
+                  (not (= (byte-sub t 13 14) ":")) (not (= (byte-sub t 16 17) ":"))
+                  (not (digits (str-concat (byte-sub t 0 4) (byte-sub t 5 7) (byte-sub t 8 10)
+                                           (byte-sub t 11 13) (byte-sub t 14 16) (byte-sub t 17 19)))))
+            (list)
+            (civil (num t 0 4) (num t 5 7) (num t 8 10) (num t 11 13) (num t 14 16) (num t 17 19)
+                   (if utc 0 tz)))))))))
+
+; the year now in local time, for -t without one
+(def year-of (fn (secs tz)
+  (let ((days (floor (/ (+ secs (* tz 60)) 86400))))
+    (fold (fn (y k) (if (<= (days-from-civil (+ y 1) 1 1) days) (+ y 1) y)) 1970 (range 0 400)))))
+
+(def is-there (fn (f) (not (is-nil (file-stat f #t)))))
+
+; one file: 0 or 1
+(def touch-one (fn (f secs create stamp)
+  (cond ((is-there f)
+         (if (is-nil secs) (do (err-write "touch: " f ": no clock to take the time from\n") 1)
+           (let ((r (file-touch f secs)))
+             (if (= (type-of r) "string") (do (err-write "touch: " f ": " r "\n") 1) 0))))
+        ((not create) 0)
+        ((not (write-file f "")) 1)
+        ((not stamp) 0)
+        (else (let ((r (file-touch f secs)))
+                (if (= (type-of r) "string") (do (err-write "touch: " f ": " r "\n") 1) 0))))))
+
+(letv (opts files bad) (getopt ARGS "acmr:t:d:")
+  (let ((ref (opt opts "r" "")) (tspec (opt opts "t" "")) (dspec (opt opts "d" ""))
+        (clock (now)) (tz (let ((z (time-zone))) (if (is-nil z) 0 z))))
+    (cond ((not (= bad "")) (do (err-write "touch: bad option -" bad "\n" usage "\n") (exit-status 1)))
+          ((has opts "a") (do (err-write "touch: -a is not supported here (no access times)\n") (exit-status 1)))
+          ((> (length (filter (fn (x) (not (= x ""))) (list ref tspec dspec))) 1)
+           (do (err-write "touch: one of -r, -t and -d\n") (exit-status 1)))
+          ((= (length files) 0) (do (err-write usage "\n") (exit-status 1)))
+          (else
+            (let ((given (cond ((not (= ref ""))
+                                (let ((s (file-stat ref #t)))
+                                  (cond ((is-nil s) (tuple #f (str-concat "touch: " ref ": No such file or directory")))
+                                        (else (letv (k z t o) s
+                                                (if (is-nil t) (tuple #f (str-concat "touch: " ref ": no time kept for it"))
+                                                  (tuple #t t)))))))
+                               ((not (= tspec ""))
+                                (let ((v (from-t tspec tz (if (is-nil clock) 1970 (year-of clock tz)))))
+                                  (if (is-nil v) (tuple #f (str-concat "touch: out of range or illegal time specification: " tspec))
+                                    (tuple #t v))))
+                               ((not (= dspec ""))
+                                (let ((v (from-d dspec tz)))
+                                  (if (is-nil v) (tuple #f (str-concat "touch: out of range or illegal time specification: " dspec))
+                                    (tuple #t v))))
+                               (else (tuple #t (list))))))
+              (letv (ok v) given
+                (if (not ok) (do (err-write v "\n") (exit-status 1))
+                  (let ((stamp (not (is-nil v))) (secs (if (is-nil v) clock v)))
+                    (exit-status (fold (fn (st f) (if (= (touch-one f secs (not (has opts "c")) stamp) 0) st 1))
+                                       0 files))))))))))

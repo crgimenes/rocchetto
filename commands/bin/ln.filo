@@ -1,0 +1,3 @@
+; ln: POSIX has it, this shell cannot: it says so, and fails.
+(err-write "ln: not supported by rocchetto on " (if (= HOSTNAME "") MACHINE HOSTNAME) "\n")
+(exit-status 1)

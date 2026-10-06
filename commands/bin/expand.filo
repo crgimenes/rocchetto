@@ -1,0 +1,86 @@
+; expand [-t tablist] [file...]: tabs as the spaces up to the next stop:
+; every 8 columns, every n with -t n, or at the columns a list names (-t
+; 2,5 or "2 5", from 0, ascending); past the last one a tab is a space. A
+; backspace moves back a column; a wide character takes two.
+
+(def usage "usage: expand [-t tablist] [file...]")
+
+(def opt (fn (opts letter default)
+  (fold (fn (v o) (letv (l val) o (if (= l letter) val v))) default opts)))
+
+; the stops: (tuple every list), every 0 when a list is given
+(def not-digit (re-compile "[^0-9]"))
+(def stops-of (fn (t)
+  (let ((parts (filter (fn (p) (> (byte-len p) 0)) (str-split " " (str-replace "," " " t)))))
+    (cond ((= (length (filter (fn (p) (not (is-nil (re-match not-digit p)))) parts)) 0)
+           (if (= (length parts) 1) (tuple (number (nth parts 0)) (list))
+             (tuple 0 (map number parts))))
+          (else (tuple -1 (list)))))))
+
+(def ascending (fn (l) (letv (ok last) (fold (fn (st x) (letv (ok last) st (tuple (and ok (> x last)) x))) (tuple #t -1) l) ok)))
+
+; the column of the next stop after col, -1 when past the last
+(def next-stop (fn (stops col)
+  (letv (every l) stops
+    (if (> every 0) (* every (+ (floor (/ col every)) 1))
+      (fold (fn (found s) (if (and (< found 0) (> s col)) s found)) -1 l)))))
+
+(def spaces (fn (n) (str-join "" (map (fn (i) " ") (range 0 n)))))
+
+; what a tab at col writes, and the column after it
+(def tab-at (fn (stops col)
+  (let ((s (next-stop stops col))) (if (< s 0) (tuple " " (+ col 1)) (tuple (spaces (- s col)) s)))))
+
+; where a window of text from at ends: about 4 KB, never inside a character
+(def window (fn (text at)
+  (iterate (fn (e) (if (or (>= e (byte-len text)) (<= e (+ at 1)) (not (= (u32-and (byte-at text e) 192) 128))) (list) (- e 1)))
+           (math-min (byte-len text) (+ at 4096)))))
+
+; a line with no backspace: the text between tabs as it is, its columns
+; counted whole
+(def expand-tabs (fn (l stops)
+  (iterate (fn (st)
+             (letv (at col) st
+               (if (> at (byte-len l)) (list)
+                 (let ((i (byte-find l "\t" at)))
+                   (if (< i 0) (do (out-write (byte-sub l at)) (tuple (+ (byte-len l) 1) col))
+                     (let ((seg (byte-sub l at i)))
+                       (letv (pad after) (tab-at stops (+ col (str-width seg)))
+                         (do (out-write seg pad) (tuple (+ i 1) after)))))))))
+           (tuple 0 0))))
+
+; any line: a character at a time, a window of it decoded at a time
+(def expand-chars (fn (l stops)
+  (iterate (fn (st)
+             (letv (at col) st
+               (if (>= at (byte-len l)) (list)
+                 (let ((e (window l at)))
+                   (tuple e (fold (fn (col cp)
+                                    (cond ((= cp 9) (letv (pad after) (tab-at stops col) (do (out-write pad) after)))
+                                          ((= cp 8) (do (out-write (utf8-encode cp)) (math-max 0 (- col 1))))
+                                          ((= cp 10) (do (out-write "\n") 0))
+                                          (else (do (out-write (utf8-encode cp)) (+ col (rune-width cp))))))
+                                  col (utf8-runes (byte-sub l at e))))))))
+           (tuple 0 0))))
+
+(def expand-line (fn (l stops)
+  (if (< (byte-find l "\b") 0) (expand-tabs l stops) (expand-chars l stops))))
+
+(def expand-source (fn (next stops)
+  (iterate (fn (go) (let ((l (next))) (if (is-nil l) (list) (do (expand-line l stops) #t)))) #t)))
+
+(letv (opts files bad) (getopt ARGS "t:")
+  (let ((stops (stops-of (opt opts "t" "8"))))
+    (letv (every l) stops
+      (cond ((not (= bad "")) (do (err-write "expand: bad option -" bad "\n" usage "\n") (exit-status 1)))
+            ((or (< every 0) (and (= every 0) (or (= (length l) 0) (not (ascending l)))))
+             (do (err-write "expand: the tab list is a number, or positions in ascending order\n") (exit-status 1)))
+            ((= (length files) 0) (expand-source (fn () (in-line)) stops))
+            (else
+              (exit-status
+                (fold (fn (worst name)
+                        (if (= name "-") (do (expand-source (fn () (in-line)) stops) worst)
+                          (let ((h (file-open name)))
+                            (if (= (type-of h) "string") (do (err-write "expand: " name ": " h "\n") 1)
+                              (do (expand-source (fn () (file-line h)) stops) (file-close h) worst)))))
+                      0 files)))))))

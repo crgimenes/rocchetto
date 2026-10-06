@@ -1,0 +1,22 @@
+; rmdir [-p] dir...: each empty directory removed; -p then the ones before
+; it in the name, last first, while they are empty.
+
+(def usage "usage: rmdir [-p] dir...")
+(def has (fn (opts letter) (> (length (filter (fn (o) (letv (l val) o (= l letter))) opts)) 0)))
+
+; "a/b/c" -> "a/b/c" "a/b" "a"
+(def chain (fn (p)
+  (let ((parts (filter (fn (s) (> (byte-len s) 0)) (str-split "/" p)))
+        (root (if (and (> (byte-len p) 0) (= (byte-sub p 0 1) "/")) "/" "")))
+    (reverse (map (fn (i) (str-concat root (str-join "/" (map (fn (j) (nth parts j)) (range 0 (+ i 1))))))
+                  (range 0 (length parts)))))))
+
+(letv (opts dirs bad) (getopt ARGS "p")
+  (cond ((not (= bad "")) (do (err-write "rmdir: bad option -" bad "\n" usage "\n") (exit-status 1)))
+        ((= (length dirs) 0) (do (err-write usage "\n") (exit-status 1)))
+        (else
+          (let ((p (has opts "p")))
+            (exit-status
+              (fold (fn (st d)
+                      (if (if p (fold (fn (ok x) (and ok (rmdir x))) #t (chain d)) (rmdir d)) st 1))
+                    0 dirs))))))

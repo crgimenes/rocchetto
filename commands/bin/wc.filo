@@ -1,0 +1,91 @@
+; wc [-c | -m] [-lw] [file...]: the newlines, words and bytes of each file
+; (or of the input, - or none), as POSIX writes them ("%d %d %d %s"), and a
+; total line after more than one. -l, -w, -c say only those; -m characters
+; (UTF-8; a byte that is no character counts as one) in the place of bytes
+; (-c wins when both are given).
+; A word is what lies between blanks (space, tab, newline, CR, VT, FF).
+
+(def usage "usage: wc [-c | -m] [-lw] [file...]")
+(def has (fn (opts letter) (> (length (filter (fn (o) (letv (l val) o (= l letter))) opts)) 0)))
+(def is-stdin (fn (src) (and (= (type-of src) "string") (= src "-"))))
+(def opened (fn (name) (if (= name "-") "-" (file-open name))))
+(def next-bytes (fn (src n) (if (is-stdin src) (in-read n) (file-read src n))))
+
+(def blanks (list "\t" "\r" "\v" "\f" "\n"))
+(def words-in (fn (line)
+  (length (filter (fn (w) (> (byte-len w) 0))
+                  (str-split " " (fold (fn (s b) (str-replace b " " s)) line blanks))))))
+
+; characters without a list of them: a list for text that is not UTF-8
+(def chars-in (fn (l) (if (utf8-valid l) (str-len l) (length (utf8-runes l)))))
+(def newlines (fn (s)
+  (letv (from k)
+        (iterate (fn (st) (letv (from k) st (let ((i (byte-find s "\n" from))) (if (< i 0) (list) (tuple (+ i 1) (+ k 1))))))
+                 (tuple 0 0))
+    k)))
+(def blank-byte (fn (b) (or (= b 32) (and (>= b 9) (<= b 13)))))
+(def lead-len (fn (b) (cond ((< b 128) 1) ((= (u32-and b 224) 192) 2) ((= (u32-and b 240) 224) 3) ((= (u32-and b 248) 240) 4) (else 1))))
+
+; where text may be cut without splitting its last character: before a
+; character the bytes do not finish yet
+(def rune-cut (fn (text)
+  (let ((n (byte-len text)))
+    (let ((k (iterate (fn (k) (if (or (<= k 0) (<= k (- n 4)) (not (= (u32-and (byte-at text k) 192) 128))) (list) (- k 1)))
+                      (- n 1))))
+      (if (or (< k 0) (<= (+ k (lead-len (byte-at text k))) n)) n k)))))
+
+; (lines words bytes chars) of a source, a block at a time (a line of any
+; length); words and characters only when they are shown. A word cut by
+; the block's end goes on in the next; so does a character, carried over.
+(def count (fn (src show)
+  (letv (sl sw sb sm) show
+    (letv (nl w b ch inword carry)
+          (iterate (fn (st)
+                     (letv (nl w b ch inword carry) st
+                       (let ((blk (next-bytes src 65536)))
+                         (if (and (is-nil blk) (= carry "")) (list)
+                           (let ((text (if (is-nil blk) carry (str-concat carry blk))))
+                             (let ((cut (if (is-nil blk) (byte-len text) (rune-cut text))))
+                               (let ((part (byte-sub text 0 cut)) (n cut))
+                                 (tuple (+ nl (newlines part))
+                                        (if (and sw (> n 0))
+                                          (+ w (words-in part) (if (and inword (not (blank-byte (byte-at part 0)))) -1 0))
+                                          w)
+                                        (+ b n)
+                                        (if sm (+ ch (chars-in part)) ch)
+                                        (if (= n 0) inword (not (blank-byte (byte-at part (- n 1)))))
+                                        (if (is-nil blk) "" (byte-sub text cut))))))))))
+                 (tuple 0 0 0 0 #f ""))
+      (tuple nl w b ch)))))
+
+(def report (fn (c name show)
+  (letv (nl w b ch) c
+    (letv (sl sw sb sm) show
+      (let ((fields (filter (fn (x) (not (is-nil x)))
+                            (list (if sl (int-text nl) (list)) (if sw (int-text w) (list))
+                                  (if sb (int-text b) (list)) (if sm (int-text ch) (list))))))
+        (out-write (str-join " " (if (= name "") fields (list-append fields name))) "\n"))))))
+
+(letv (opts files bad) (getopt ARGS "clmw")
+  (cond ((not (= bad "")) (do (err-write "wc: bad option -" bad "\n" usage "\n") (exit-status 1)))
+        (else
+          (let ((any (or (has opts "l") (has opts "w") (has opts "c") (has opts "m"))))
+            (let ((show (tuple (or (not any) (has opts "l")) (or (not any) (has opts "w"))
+                               (or (not any) (has opts "c"))
+                               (and (has opts "m") (not (has opts "c")))))
+                  (names (if (= (length files) 0) (list "-") files)))
+              (letv (st total)
+                    (fold (fn (acc name)
+                            (letv (st total) acc
+                              (let ((src (opened name)))
+                                (if (and (= (type-of src) "string") (not (is-stdin src)))
+                                  (do (err-write "wc: " name ": " src "\n") (tuple 1 total))
+                                  (let ((c (count src show)))
+                                    (do (report c (if (= (length files) 0) "" name) show)
+                                        (if (is-stdin src) #f (file-close src))
+                                        (letv (a b2 c2 d) c
+                                          (letv (ta tb tc td) total
+                                            (tuple st (tuple (+ a ta) (+ b2 tb) (+ c2 tc) (+ d td)))))))))))
+                          (tuple 0 (tuple 0 0 0 0)) names)
+                (do (if (> (length files) 1) (report total "total" show) #f)
+                    (exit-status st))))))))

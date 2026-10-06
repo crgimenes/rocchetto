@@ -1,0 +1,75 @@
+; expr operand [operator operand]...: the old way to count and to match.
+; | & = != < <= > >= + - * / % : and ( ), from the loosest; numbers when
+; both sides are integers, strings otherwise. STRING : BRE matches from the
+; start: the \( \) group, or how many bytes matched. Out the result; $? 0,
+; 1 when it is null or 0, 2 for an error.
+
+(def usage "usage: expr operand [operator operand]...")
+(def int-re (re-compile "^-?[0-9]+$" "E"))
+(def is-int (fn (s) (not (is-nil (re-match int-re s)))))
+(def null (fn (s) (or (= s "") (and (is-int s) (= (number s) 0)))))
+(def first-of (fn (l) (if (= (length l) 0) "" (nth l 0))))
+(def trunc (fn (x) (if (< x 0) (ceil x) (floor x))))
+
+; a level of the grammar over the words: (value rest error)
+(def binary (fn (ops)
+  (fn (ws next combine)
+    (iterate (fn (st)
+               (letv (v rest err) st
+                 (let ((op (first-of rest)))
+                   (if (or (not (= err "")) (= (length (filter (fn (o) (= o op)) ops)) 0)) (list)
+                     (letv (w r2 e2) (next (tail rest))
+                       (if (not (= e2 "")) (tuple v r2 e2)
+                         (letv (res e3) (combine op v w) (tuple res r2 e3))))))))
+             (next ws)))))
+
+(def compare (fn (op a b)
+  (let ((c (if (and (is-int a) (is-int b)) (let ((d (- (number a) (number b)))) (cond ((< d 0) -1) ((> d 0) 1) (else 0))) (byte-cmp a b))))
+    (tuple (if (cond ((= op "=") (= c 0)) ((= op "!=") (not (= c 0))) ((= op "<") (< c 0))
+                     ((= op "<=") (<= c 0)) ((= op ">") (> c 0)) (else (>= c 0)))
+             "1" "0")
+           ""))))
+
+(def arith (fn (op a b)
+  (cond ((not (and (is-int a) (is-int b))) (tuple "" "non-integer argument"))
+        ((and (or (= op "/") (= op "%")) (= (number b) 0)) (tuple "" "division by zero"))
+        (else
+          (let ((x (number a)) (y (number b)))
+            (tuple (int-text (cond ((= op "+") (+ x y)) ((= op "-") (- x y)) ((= op "*") (* x y))
+                                   ((= op "/") (trunc (/ x y)))
+                                   (else (- x (* y (trunc (/ x y)))))))
+                   ""))))))
+
+(def match (fn (op s pat)
+  (let ((re (re-compile (str-concat "^" pat))))
+    (if (= (type-of re) "string") (tuple "" re)
+      (let ((m (re-match re s)) (grouped (>= (byte-find pat "\\(") 0)))
+        (tuple (cond ((is-nil m) (if grouped "" "0"))
+                     (grouped (let ((g (nth m 1))) (if (is-nil g) "" (letv (a b) g (byte-sub s a b)))))
+                     (else (letv (a b) (nth m 0) (int-text b))))
+               ""))))))
+
+; level 0 |, 1 &, 2 the comparisons, 3 + -, 4 * / %, 5 :, 6 a word or ( )
+(def parse (fn (ws level)
+  (cond ((= level 0) ((binary (list "|")) ws (fn (r) (parse r 1)) (fn (op a b) (tuple (if (null a) (if (null b) "0" b) a) ""))))
+        ((= level 1) ((binary (list "&")) ws (fn (r) (parse r 2)) (fn (op a b) (tuple (if (or (null a) (null b)) "0" a) ""))))
+        ((= level 2) ((binary (list "=" "!=" "<" "<=" ">" ">=")) ws (fn (r) (parse r 3)) compare))
+        ((= level 3) ((binary (list "+" "-")) ws (fn (r) (parse r 4)) arith))
+        ((= level 4) ((binary (list "*" "/" "%")) ws (fn (r) (parse r 5)) arith))
+        ((= level 5) ((binary (list ":")) ws (fn (r) (parse r 6)) match))
+        ((= (length ws) 0) (tuple "" ws "syntax error: an operand is expected"))
+        ((= (nth ws 0) "(")
+         (letv (v rest err) (parse (tail ws) 0)
+           (cond ((not (= err "")) (tuple v rest err))
+                 ((= (first-of rest) ")") (tuple v (tail rest) ""))
+                 (else (tuple v rest "syntax error: ( without )")))))
+        (else (tuple (nth ws 0) (tail ws) "")))))
+
+(def main (fn ()
+  (if (= (length ARGS) 0) (do (err-write usage "\n") (exit-status 2))
+    (letv (v rest err) (parse ARGS 0)
+      (cond ((not (= err "")) (do (err-write "expr: " err "\n") (exit-status 2)))
+            ((> (length rest) 0) (do (err-write "expr: syntax error: an operator is expected\n") (exit-status 2)))
+            (else (do (out-write v "\n") (exit-status (if (null v) 1 0)))))))))
+
+(main)

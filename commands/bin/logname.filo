@@ -1,0 +1,2 @@
+; logname: the name the session logged in with.
+(out-write USER "\n")

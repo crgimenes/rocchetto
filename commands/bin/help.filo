@@ -1,0 +1,4 @@
+; help is a script, not a table: what the shell can do is written in
+; roc_help.md, and this shows it, in the pager for a person and whole into
+; a | or a > (help | grep sort).
+(if (is-nil (out-terminal)) (cat "/bin/roc_help.md") (less "/bin/roc_help.md"))

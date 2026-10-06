@@ -1,0 +1,25 @@
+; tree [-a] [dir]: the directory drawn as a tree, recursively. The walk is a
+; Filo function calling itself on each subdirectory; the prefix carries the
+; lines of the branches still open above. Dot files only with -a.
+(def walk
+  (fn (dir prefix all)
+    (let ((es (dir-entries dir all)) (n (length es)))
+      (map
+        (fn (i)
+          (letv (name isdir) (nth es i)
+            (let ((last (= i (- n 1)))
+                  (branch (if last "└── " "├── "))
+                  (below (if last "    " "│   "))
+                  (child (str-concat dir (if (= dir "/") "" "/") name)))
+              (echo (str-concat prefix branch name (if isdir "/" "")))
+              (if isdir (walk child (str-concat prefix below) all)))))
+        (range n)))))
+
+(let ((all (and (> (length ARGS) 0) (= (nth ARGS 0) "-a")))
+      (root
+      (cond
+        ((and all (> (length ARGS) 1)) (nth ARGS 1))
+        ((and (not all) (> (length ARGS) 0)) (nth ARGS 0))
+        (else (pwd)))))
+  (echo root)
+  (walk root "" all))

@@ -1,0 +1,57 @@
+; uniq [-c | -d | -u] [-f fields] [-s chars] [input [output]]: each run of
+; equal lines next to each other as one; -c with how many before it, -d
+; only the ones that repeat, -u only the ones that do not. Lines compare
+; after skipping -f fields (blanks and the non-blanks after them) and then
+; -s bytes. The input is - or none for the input, the output a file.
+
+(def usage "usage: uniq [-c | -d | -u] [-f fields] [-s chars] [input [output]]")
+(def has (fn (opts letter) (> (length (filter (fn (o) (letv (l val) o (= l letter))) opts)) 0)))
+(def opt (fn (opts letter default) (fold (fn (v o) (letv (l val) o (if (= l letter) val v))) default opts)))
+(def whole (re-compile "^[0-9][0-9]*$"))
+(def is-stdin (fn (src) (and (= (type-of src) "string") (= src "-"))))
+(def opened (fn (name) (if (= name "-") "-" (file-open name))))
+(def next-line (fn (src) (if (is-stdin src) (in-line) (file-line src))))
+(def strip (fn (l) (if (and (> (byte-len l) 0) (= (byte-at l (- (byte-len l) 1)) 10)) (byte-sub l 0 (- (byte-len l) 1)) l)))
+
+; what of a line compares: past f fields, then past s bytes
+(def field-re (re-compile "^[ \t]*[^ \t]*" "E"))
+(def key (fn (line f s)
+  (let ((past (fold (fn (rest i) (letv (a b) (nth (re-match field-re rest) 0) (byte-sub rest b))) line (range 0 f))))
+    (byte-sub past (math-min s (byte-len past))))))
+
+(def pad (fn (n) (let ((t (int-text n))) (str-concat (str-join "" (map (fn (i) " ") (range 0 (math-max 0 (- 4 (byte-len t)))))) t))))
+
+(letv (opts args bad) (getopt ARGS "cduf:s:")
+  (let ((fs (opt opts "f" "0")) (ss (opt opts "s" "0"))
+        (counted (has opts "c")) (dups (has opts "d")) (lone (has opts "u")))
+    (cond ((not (= bad "")) (do (err-write "uniq: bad option -" bad "\n" usage "\n") (exit-status 1)))
+          ((or (is-nil (re-match whole fs)) (is-nil (re-match whole ss)))
+           (do (err-write "uniq: -f and -s take a number\n") (exit-status 1)))
+          ((> (length args) 2) (do (err-write usage "\n") (exit-status 1)))
+          (else
+            (let ((src (opened (if (> (length args) 0) (nth args 0) "-")))
+                  (out (if (> (length args) 1) (file-open (nth args 1) "w") "-")))
+              (cond ((and (= (type-of src) "string") (not (is-stdin src)))
+                     (do (err-write "uniq: " (nth args 0) ": " src "\n") (exit-status 1)))
+                    ((and (= (type-of out) "string") (not (= out "-")))
+                     (do (err-write "uniq: " (nth args 1) ": " out "\n") (exit-status 1)))
+                    (else
+                      (let ((put (fn (line times)
+                                   (if (or (and dups (= times 1)) (and lone (> times 1))) #f
+                                     (let ((text (str-concat (if counted (str-concat (pad times) " ") "") line "\n")))
+                                       (if (= (type-of out) "string") (out-write text) (file-write out text))))))
+                            (f (number fs)) (s (number ss)))
+                        ; (line key times), nil before the first
+                        (let ((last (iterate (fn (st)
+                                               (let ((l (next-line src)))
+                                                 (if (is-nil l) (list)
+                                                   (let ((line (strip l)))
+                                                     (let ((k (key line f s)))
+                                                       (if (and (not (is-nil st)) (letv (pl pk pt) st (= pk k)))
+                                                         (letv (pl pk pt) st (tuple pl pk (+ pt 1)))
+                                                         (do (if (is-nil st) #f (letv (pl pk pt) st (put pl pt)))
+                                                             (tuple line k 1))))))))
+                                             (list))))
+                          (do (if (is-nil last) #f (letv (pl pk pt) last (put pl pt)))
+                              (if (= (type-of out) "string") #f (file-close out))
+                              (exit-status 0)))))))))))

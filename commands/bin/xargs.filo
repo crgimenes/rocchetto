@@ -1,0 +1,150 @@
+; xargs [-t] [-n number] [-s size] [-I replstr] [-E eofstr] [utility [argument...]]:
+; the utility (echo) run with the input's items after its arguments, as
+; many at a time as -n allows and as fit in -s bytes (each argument and
+; its NUL, as POSIX counts) and in the shell's line, quoted. Items are split by blanks and newlines,
+; quoted with ' or " or a \ as POSIX's xargs reads them; -I takes each line
+; whole (leading blanks dropped) and puts it where replstr is in the
+; arguments, one run per line; -E stops at that item; -t says each command
+; on stderr first. No input, no run (as macOS). Status: 0; 123 when a run
+; ended 1 to 125; 124 when one ended 255 (and no more run); 126 or 127 when
+; the utility could not be.
+
+(def usage "usage: xargs [-t] [-n number] [-s size] [-I replstr] [-E eofstr] [utility [argument...]]")
+(def opt (fn (opts letter default) (fold (fn (v o) (letv (l val) o (if (= l letter) val v))) default opts)))
+(def has (fn (opts letter) (> (length (filter (fn (o) (letv (l val) o (= l letter))) opts)) 0)))
+(def whole (re-compile "^[0-9][0-9]*$"))
+; the shell's line a run is joined into (SH_LINE_MAX, with room to spare)
+(def line-max 1000)
+
+; the items of an input with no quote and no backslash: its words, at once
+(def words-of (fn (text)
+  (filter (fn (w) (> (byte-len w) 0)) (str-split " " (str-replace "\n" " " (str-replace "\t" " " text))))))
+
+; the items of the input, as POSIX's xargs reads them: (items error)
+(def items-of (fn (text)
+  (if (and (< (byte-find text "'") 0) (< (byte-find text "\"") 0) (< (byte-find text "\\") 0))
+    (tuple (words-of text) "")
+    (quoted-items text))))
+(def quoted-items (fn (text)
+  (letv (out cur quote esc started err)
+        (fold (fn (st cp)
+                (letv (out cur quote esc started err) st
+                  (let ((c (utf8-encode cp)))
+                    (cond ((not (= err "")) st)
+                          (esc (tuple out (str-concat cur c) quote #f #t err))
+                          ((not (= quote ""))
+                           (cond ((= c quote) (tuple out cur "" #f #t err))
+                                 ((= cp 10) (tuple out cur quote #f started "unterminated quote"))
+                                 (else (tuple out (str-concat cur c) quote #f #t err))))
+                          ((= c "\\") (tuple out cur quote #t #t err))
+                          ((or (= c "'") (= c "\"")) (tuple out cur c #f #t err))
+                          ((or (= cp 32) (= cp 9) (= cp 10))
+                           (if started (tuple (list-append out cur) "" quote #f #f err) st))
+                          (else (tuple out (str-concat cur c) quote #f #t err))))))
+              (tuple (list) "" "" #f #f "") (utf8-runes text))
+    (cond ((not (= err "")) (tuple out err))
+          ((not (= quote "")) (tuple out "unterminated quote"))
+          (started (tuple (list-append out cur) ""))
+          (else (tuple out ""))))))
+
+; the lines of the input for -I, leading blanks dropped, empty ones skipped
+(def lead-re (re-compile "^[ \t]*" "E"))
+(def lines-of (fn (text)
+  (filter (fn (l) (> (byte-len l) 0))
+          (map (fn (l) (letv (a b) (nth (re-match lead-re l) 0) (byte-sub l b)))
+               (str-split "\n" text)))))
+
+; until -E's word
+(def until-eof (fn (items eof)
+  (if (= eof "") items
+    (let ((at (fold (fn (at i) (if (and (< at 0) (= (nth items i) eof)) i at)) -1 (range 0 (length items)))))
+      (if (< at 0) items (map (fn (i) (nth items i)) (range 0 at)))))))
+
+; a word's length quoted as sh_join does it, and a line's
+(def special (re-compile (str-concat "[^A-Za-z0-9_./~:=+@%,^" (bytes 128) "-" (bytes 255) "-]") "E"))
+(def quoted-len (fn (w)
+  (if (and (> (byte-len w) 0) (is-nil (re-match special w))) (byte-len w)
+    (+ 2 (byte-len w) (* 3 (- (length (str-split "'" w)) 1))))))
+(def line-len (fn (words) (fold (fn (n w) (+ n 1 (quoted-len w))) 0 words)))
+; the length POSIX's -s counts: each argument and its NUL
+(def arg-len (fn (words) (fold (fn (n w) (+ n 1 (byte-len w))) 0 words)))
+(def fits (fn (words size) (and (<= (arg-len words) size) (<= (line-len words) line-max))))
+
+; one run: (status) with its output passed on, the command said with -t
+(def run-one (fn (words trace)
+  (do (if trace (err-write (str-join " " words) "\n") #f)
+      (letv (st o e) (run words)
+        (do (out-write o) (err-write e) st)))))
+
+; the worst status so far, as xargs reports them
+(def worse (fn (worst st)
+  (cond ((or (= st 126) (= st 127)) st)
+        ((= st 255) 124)
+        ((and (>= st 1) (<= st 125)) (if (= worst 0) 123 worst))
+        (else worst))))
+
+(def gave-up (fn (st) (or (= st 124) (= st 126) (= st 127))))
+
+; the items run in batches, each as soon as it is full: as many as -n
+; allows and the line has room for. (i batch line-len arg-len worst)
+(def run-batches (fn (cmd items n size trace)
+  (let ((base-l (line-len cmd)) (base-a (arg-len cmd)))
+    (let ((flush (fn (cur worst) (if (or (= (length cur) 0) (gave-up worst)) worst (worse worst (run-one (list-concat cmd cur) trace))))))
+      (letv (i cur cl al worst)
+            (iterate (fn (st)
+                       (letv (i cur cl al worst) st
+                         (if (or (>= i (length items)) (gave-up worst)) (list)
+                           (let ((it (nth items i)))
+                             (let ((ql (+ 1 (quoted-len it))) (bl (+ 1 (byte-len it))))
+                               (if (and (> (length cur) 0)
+                                        (or (and (> n 0) (>= (length cur) n)) (> (+ al bl) size) (> (+ cl ql) line-max)))
+                                 (tuple (+ i 1) (list it) (+ base-l ql) (+ base-a bl) (flush cur worst))
+                                 (tuple (+ i 1) (list-append cur it) (+ cl ql) (+ al bl) worst)))))))
+                     (tuple 0 (list) base-l base-a 0))
+        (flush cur worst))))))
+
+; whether each item fits the command line alone: the longest of each kind
+; decides, as the two lengths only grow with the item
+(def all-fit (fn (cmd items size)
+  (letv (i ql bl)
+        (iterate (fn (st)
+                   (letv (i ql bl) st
+                     (if (>= i (length items)) (list)
+                       (let ((it (nth items i)))
+                         (tuple (+ i 1) (math-max ql (+ 1 (quoted-len it))) (math-max bl (+ 1 (byte-len it))))))))
+                 (tuple 0 0 0))
+    (and (<= (+ (arg-len cmd) bl) size) (<= (+ (line-len cmd) ql) line-max)))))
+
+; -I: a run for each line, the line in the place of replstr
+(def run-lines (fn (cmd lines repl size trace)
+  (letv (i worst)
+        (iterate (fn (st)
+                   (letv (i worst) st
+                     (if (or (>= i (length lines)) (gave-up worst)) (list)
+                       (let ((words (map (fn (w) (str-replace repl (nth lines i) w)) cmd)))
+                         (tuple (+ i 1) (if (not (fits words size))
+                                          (do (err-write "xargs: a command line too long\n") 1)
+                                          (worse worst (run-one words trace))))))))
+                 (tuple 0 0))
+    worst)))
+
+(def main (fn ()
+(letv (opts args bad) (getopt ARGS "tn:s:I:E:")
+  (let ((n (opt opts "n" "0")) (size (opt opts "s" "4096"))
+        (repl (opt opts "I" "")) (eof (opt opts "E" "")) (trace (has opts "t"))
+        (cmd (if (= (length args) 0) (list "echo") args)))
+    (cond ((not (= bad "")) (do (err-write "xargs: bad option -" bad "\n" usage "\n") (exit-status 1)))
+          ((or (is-nil (re-match whole n)) (is-nil (re-match whole size)))
+           (do (err-write "xargs: -n and -s take a number\n") (exit-status 1)))
+          ((not (= repl ""))
+           (exit-status (run-lines cmd (until-eof (lines-of (in-read)) eof) repl (number size) trace)))
+          (else
+            (letv (items err) (items-of (in-read))
+              (if (not (= err ""))
+                (do (err-write "xargs: " err "\n") (exit-status 1))
+                (let ((todo (until-eof items eof)))
+                  (if (not (all-fit cmd todo (number size)))
+                    (do (err-write "xargs: an argument too long for the command line\n") (exit-status 1))
+                    (exit-status (run-batches cmd todo (number n) (number size) trace))))))))))))
+
+(main)

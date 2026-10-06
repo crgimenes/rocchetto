@@ -1,0 +1,28 @@
+; The Cardputer's ls: one file a row, the name and its size, a row picked
+; with the arrows and read with Enter. Left and right go between home and
+; /bin. A name longer than the row keeps its start.
+
+(def dirs (list HOME "/bin"))
+(def at 0)
+(def sel 0)
+(def top 0)
+
+(def dir (fn () (nth dirs at)))
+(def rows (fn () (- H 2)))
+
+(def size-text
+  (fn (n) (if (< n 10000) (str-fmt "%d" n) (str-fmt "%dk" (floor (/ n 1024))))))
+
+; the entries of a directory are its full paths; the name is what follows it
+(def name-of (fn (path) (str-sub path (+ (str-len (dir)) 1) (str-len path))))
+
+(def switch (fn () (set at (- 1 at)) (set sel 0) (set top 0)))
+
+(def move
+  (fn (d)
+    (let ((n (entry-count (dir))) (want (+ sel d)))
+      (if (and (>= want 0) (< want n))
+        (do
+          (set sel want)
+          (if (< sel top) (set top sel))
+          (if (>= sel (+ top (rows))) (set top (- sel (- (rows) 1)))))))))

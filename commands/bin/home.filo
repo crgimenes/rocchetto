@@ -1,0 +1,54 @@
+; Your home between visits: what this browser keeps of it, what the
+; memory holds, a way to carry it to another machine as a file, and what
+; to do when another tab of the shell kept its own.
+(def usage
+  (fn ()
+    (echo "usage: home              what is kept, and where")
+    (echo "       home export       download the kept home as rocchetto-home.txt")
+    (echo "       home import <f>   restore a home from a file you uploaded")
+    (echo "       home keep         this tab's home is the kept one, over another tab's")
+    (echo "       home reload yes   the kept home (another tab's) in place of this tab's")))
+(def info (store-info))
+(def get (fn (name) (fold (fn (v p) (letv (k x) p (if (= k name) x v))) 0 info)))
+(def kb (fn (n) (str-concat (int-text (floor (/ n 1024))) "K")))
+(def status
+  (fn ()
+    (let ((kept (get "kept")))
+      (cond
+        ((= (get "store") "disk")
+          (echo "Your home is this device's storage: it stays as files do, nothing to carry."))
+        (else
+          (do
+            (if (< kept 0)
+              (echo
+                "This terminal keeps nothing between visits: your home lasts the session.")
+              (do
+                (echo "Kept in this browser:" (int-text kept) "of" (int-text (get "kept-cap"))
+                  (str-concat "bytes (" (kb (get "kept-file-max")) " per file at most), directories")
+                  (if (= (get "times") 1) "and file times too." "too."))
+                (echo
+                  "Clearing site data, or a private window, forgets it. Carry it: home export.")))
+            (echo "In memory now:" (int-text (get "memory-used")) "of" (int-text (get "memory-cap"))
+              "bytes," (int-text (get "files")) "of" (int-text (get "files-max"))
+              (str-concat "files (" (kb (get "file-max")) " each at most)."))
+            (if (= (get "conflict") 1)
+              (do
+                (echo "Another tab of this browser kept its home after this one read it, so this")
+                (echo "tab's changes are not kept. Either: home keep (this tab's wins), or")
+                (echo "home reload yes (the kept one replaces every file of this tab)."))
+              #f)))))))
+(cond
+  ((= (length ARGS) 0) (status))
+  ((= (nth ARGS 0) "export") (home-export))
+  ((and (= (nth ARGS 0) "import") (> (length ARGS) 1))
+    (home-import (nth ARGS 1)))
+  ((= (nth ARGS 0) "keep")
+    (if (home-keep) (echo "This tab's home is the kept one now.") (exit-status 1)))
+  ((and (= (nth ARGS 0) "reload") (> (length ARGS) 1) (= (nth ARGS 1) "yes"))
+    (home-reload))
+  ((= (nth ARGS 0) "reload")
+    (do
+      (echo "home reload puts the home kept in this browser in place of this tab's:"
+        (int-text (get "files")) "files here go. To do it: home reload yes")
+      (exit-status 1)))
+  (else (usage)))

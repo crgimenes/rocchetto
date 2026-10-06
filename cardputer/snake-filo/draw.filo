@@ -1,0 +1,19 @@
+; Blank cells mean the screen was just loaded or painted over: a new game.
+(if FRESH (reset))
+
+; Row 0 is outside the field: the hint goes there, never over the cells the
+; game reads.
+(fill 0 0 1 W " ")
+(attr A_BOLD)
+(print-at 0 0
+  (if (or started over cramped) (str-fmt "score %d  best %d" score best) "; . , / to go"))
+(attr 0)
+
+(let ((mid (+ 1 (floor (/ H 2)))))
+  (cond
+    (cramped (attr A_BOLD) (print-at mid 1 "too small") (attr 0))
+    (over (attr A_BOLD) (fg (if won 10 9))
+      (print-at (- mid 1) 2 (if won "YOU FILLED IT" "GAME OVER"))
+      (fg C_DEFAULT)
+      (attr 0)
+      (print-at mid 2 "R again  ` back"))))

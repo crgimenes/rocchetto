@@ -1,0 +1,18 @@
+; mv [-f] source target, or mv [-f] source... directory: each source moved
+; (renamed) to the target, or into the directory under its own name. -i
+; (asking) is not here; -f is what mv does anyway.
+
+(def usage "usage: mv [-f] source target | mv [-f] source... directory")
+(def has (fn (opts letter) (> (length (filter (fn (o) (letv (l val) o (= l letter))) opts)) 0)))
+(def is-dir (fn (p) (let ((s (file-stat p #t))) (and (not (is-nil s)) (letv (k z t o) s (= k "dir"))))))
+
+(letv (opts args bad) (getopt ARGS "fi")
+  (cond ((not (= bad "")) (do (err-write "mv: bad option -" bad "\n" usage "\n") (exit-status 1)))
+        ((has opts "i") (do (err-write "mv: -i is not supported here (nothing to ask with)\n") (exit-status 1)))
+        ((< (length args) 2) (do (err-write usage "\n") (exit-status 1)))
+        (else
+          (let ((target (nth args (- (length args) 1)))
+                (sources (map (fn (i) (nth args i)) (range 0 (- (length args) 1)))))
+            (if (and (> (length sources) 1) (not (is-dir target)))
+              (do (err-write "mv: " target ": Not a directory\n") (exit-status 1))
+              (exit-status (fold (fn (st s) (if (mv s target) st 1)) 0 sources)))))))

@@ -1,0 +1,112 @@
+; tr [-c | -C] [-s] string1 string2, tr -s [-c | -C] string1, tr -d [-c |
+; -C] string1, tr -ds [-c | -C] string1 string2: the input with each byte
+; of string1 turned into the byte at the same place in string2 (the last
+; one of string2 when it is shorter), or deleted (-d); -s squeezes a run of
+; one byte of the last string given into one; -c (-C) takes the bytes not
+; in string1, in order. Strings take a-z ranges, [:alpha:] and the other
+; classes, [x*n] and [x*] (x n times, or until string1's length), and \\n
+; \\t \\r \\a \\b \\f \\v \\\\ \\ooo. Bytes, as LC_ALL=C.
+
+(def usage "usage: tr [-Ccds] string1 [string2]")
+(def has (fn (opts letter) (> (length (filter (fn (o) (letv (l val) o (= l letter))) opts)) 0)))
+
+(def classes (list (tuple "alpha" "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz")
+                   (tuple "upper" "ABCDEFGHIJKLMNOPQRSTUVWXYZ") (tuple "lower" "abcdefghijklmnopqrstuvwxyz")
+                   (tuple "digit" "0123456789") (tuple "xdigit" "0123456789ABCDEFabcdef")
+                   (tuple "alnum" "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz")
+                   (tuple "space" " \t\n\r\v\f") (tuple "blank" " \t")
+                   (tuple "punct" "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~")
+                   (tuple "cntrl" "") (tuple "print" "") (tuple "graph" "")))
+(def class-bytes (fn (name)
+  (cond ((= name "cntrl") (list-append (range 0 32) 127))
+        ((= name "print") (range 32 127))
+        ((= name "graph") (range 33 127))
+        (else (let ((c (filter (fn (p) (letv (n b) p (= n name))) classes)))
+                (if (= (length c) 0) (list) (letv (n b) (nth c 0) (byte-list b))))))))
+
+; one byte of a string at i, escapes read: (byte next-i)
+(def escapes (list (tuple 110 10) (tuple 116 9) (tuple 114 13) (tuple 97 7) (tuple 98 8) (tuple 102 12) (tuple 118 11)))
+(def octal-digit (fn (b) (and (>= b 48) (<= b 55))))
+(def one (fn (s i)
+  (let ((b (byte-at s i)))
+    (if (or (not (= b 92)) (>= (+ i 1) (byte-len s))) (tuple b (+ i 1))
+      (let ((c (byte-at s (+ i 1))))
+        (if (octal-digit c)
+          (letv (v j) (iterate (fn (st) (letv (v j) st
+                                          (if (or (>= j (byte-len s)) (>= (- j i) 4) (not (octal-digit (byte-at s j)))) (list)
+                                            (tuple (+ (* v 8) (- (byte-at s j) 48)) (+ j 1)))))
+                               (tuple 0 (+ i 1)))
+            (tuple (% v 256) j))
+          (let ((e (filter (fn (p) (letv (k v) p (= k c))) escapes)))
+            (tuple (if (= (length e) 0) c (letv (k v) (nth e 0) v)) (+ i 2)))))))))
+
+; a string as its bytes; (bytes) or a reason string. [x*n] counts only in
+; string2 (fill, how long [x*] makes it, is -1 for string1)
+(def expand (fn (s fill)
+  (letv (out i why)
+        (iterate (fn (st)
+                   (letv (out i why) st
+                     (cond ((or (not (= why "")) (>= i (byte-len s))) (list))
+                           ((and (= (byte-at s i) 91) (< (+ i 1) (byte-len s)) (= (byte-at s (+ i 1)) 58))
+                            (let ((end (byte-find (byte-sub s i) ":]")))
+                              (if (< end 0) (tuple out i "a [: without its :]")
+                                (let ((bs (class-bytes (byte-sub s (+ i 2) (+ i end)))))
+                                  (if (= (length bs) 0) (tuple out i (str-concat "no class " (byte-sub s i (+ i end 2))))
+                                    (tuple (list-concat out bs) (+ i end 2) ""))))))
+                           ((and (>= fill 0) (= (byte-at s i) 91) (< (+ i 2) (byte-len s)) (letv (b j) (one s (+ i 1)) (and (< j (byte-len s)) (= (byte-at s j) 42))))
+                            (letv (b j) (one s (+ i 1))
+                              (let ((close (byte-find (byte-sub s j) "]")))
+                                (if (< close 0) (tuple out i "a [x* without its ]")
+                                  (let ((count (byte-sub s (+ j 1) (+ j close))))
+                                    (let ((n (if (= count "") (math-max 0 (- fill (length out))) (number count))))
+                                      (tuple (list-concat out (map (fn (k) b) (range 0 n))) (+ j close 1) "")))))))
+                           (else
+                             (letv (b j) (one s i)
+                               (if (and (< (+ j 1) (byte-len s)) (= (byte-at s j) 45))
+                                 (letv (c k) (one s (+ j 1))
+                                   (if (< c b) (tuple out i "a range backwards")
+                                     (tuple (list-concat out (range b (+ c 1))) k "")))
+                                 (tuple (list-append out b) j "")))))))
+                 (tuple (list) 0 ""))
+    (if (= why "") out why))))
+
+(def table (fn (default) (map (fn (i) default) (range 0 256))))
+; fold, not filter: a filter takes room for its whole list on each call
+(def member-table (fn (bs) (map (fn (i) (fold (fn (in b) (or in (= b i))) #f bs)) (range 0 256))))
+; the byte k becomes: string2's at the last place k has in string1
+(def target (fn (set1 places s2 k)
+  (let ((at (fold (fn (last i) (if (= (nth set1 i) k) i last)) -1 places)))
+    (if (< at 0) k (nth s2 (math-min at (- (length s2) 1)))))))
+
+(letv (opts sets bad) (getopt ARGS "Ccds")
+  (let ((complement (or (has opts "c") (has opts "C"))) (del (has opts "d")) (squeeze (has opts "s")))
+    (cond ((not (= bad "")) (do (err-write "tr: bad option -" bad "\n" usage "\n") (exit-status 1)))
+          ((or (= (length sets) 0) (> (length sets) 2)
+               (and del (not squeeze) (not (= (length sets) 1)))
+               (and del squeeze (not (= (length sets) 2)))
+               (and (not del) (not squeeze) (not (= (length sets) 2))))
+           (do (err-write usage "\n") (exit-status 1)))
+          (else
+            (let ((s1 (expand (nth sets 0) -1)))
+              (if (= (type-of s1) "string") (do (err-write "tr: " s1 "\n") (exit-status 1))
+                (let ((set1 (if complement (let ((in (member-table s1))) (filter (fn (b) (not (nth in b))) (range 0 256))) s1)))
+                  (let ((s2 (if (> (length sets) 1) (expand (nth sets 1) (length set1)) (list))))
+                    (if (= (type-of s2) "string") (do (err-write "tr: " s2 "\n") (exit-status 1))
+                      (let ((translate (and (not del) (> (length s2) 0))))
+                        ; the byte each byte becomes; which go; which squeeze
+                        (let ((map-to (if (not translate) (range 0 256) (let ((places (range 0 (length set1)))) (map (fn (k) (target set1 places s2 k)) (range 0 256)))))
+                              (gone (if del (member-table set1) (table #f)))
+                              (squeezed (if squeeze (member-table (if (or del translate) s2 set1)) (table #f))))
+                          (do (iterate (fn (prev)
+                                         (let ((chunk (in-read 4096)))
+                                           (if (is-nil chunk) (list)
+                                             (let ((to (map (fn (b) (nth map-to b)) (filter (fn (b) (not (nth gone b))) (byte-list chunk)))))
+                                               (let ((out (if (not squeeze) to
+                                                            (map (fn (i) (nth to i))
+                                                                 (filter (fn (i) (let ((c (nth to i)) (p (if (= i 0) prev (nth to (- i 1)))))
+                                                                                   (not (and (= c p) (nth squeezed c)))))
+                                                                         (range 0 (length to)))))))
+                                                 (do (out-write (bytes out))
+                                                     (if (= (length to) 0) prev (nth to (- (length to) 1)))))))))
+                                       -1)
+                              (exit-status 0)))))))))))))

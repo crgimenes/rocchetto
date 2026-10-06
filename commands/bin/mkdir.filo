@@ -1,0 +1,30 @@
+; mkdir [-p] dir...: each directory made; -p makes the ones before it that
+; are not there and takes one that is. -m is not here (no modes).
+
+(def usage "usage: mkdir [-p] dir...")
+(def has (fn (opts letter) (> (length (filter (fn (o) (letv (l val) o (= l letter))) opts)) 0)))
+
+; "a/b/c" -> "a" "a/b" "a/b/c"; "/x/y" -> "/x" "/x/y"
+(def prefixes (fn (p)
+  (let ((parts (filter (fn (s) (> (byte-len s) 0)) (str-split "/" p)))
+        (root (if (and (> (byte-len p) 0) (= (byte-sub p 0 1) "/")) "/" "")))
+    (map (fn (i) (str-concat root (str-join "/" (map (fn (j) (nth parts j)) (range 0 (+ i 1))))))
+         (range 0 (length parts))))))
+
+(def is-dir (fn (p) (let ((s (file-stat p #t))) (and (not (is-nil s)) (letv (k z t o) s (= k "dir"))))))
+
+(def make-p (fn (d)
+  (fold (fn (ok p)
+          (cond ((not ok) #f)
+                ((is-dir p) #t)
+                ((not (is-nil (file-stat p #t))) (do (err-write "mkdir: " p ": Not a directory\n") #f))
+                (else (mkdir p))))
+        #t (prefixes d))))
+
+(letv (opts dirs bad) (getopt ARGS "pm:")
+  (cond ((not (= bad "")) (do (err-write "mkdir: bad option -" bad "\n" usage "\n") (exit-status 1)))
+        ((has opts "m") (do (err-write "mkdir: -m is not supported here (no modes)\n") (exit-status 1)))
+        ((= (length dirs) 0) (do (err-write usage "\n") (exit-status 1)))
+        (else
+          (let ((p (has opts "p")))
+            (exit-status (fold (fn (st d) (if (if p (make-p d) (mkdir d)) st 1)) 0 dirs))))))

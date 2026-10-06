@@ -1,0 +1,45 @@
+; Helpers for the Cardputer's own screens. The panel is 20 columns by 8 rows
+; and its font is ASCII only (anything else shows as "?"), so these screens
+; fit whole and draw with plain characters. The keyboard has no arrows of its
+; own: they are printed on ; . , / and the screens take those keys as the
+; arrows, next to the real ones that arrive over the serial line.
+
+(def single (list "+" "-" "+" "|" "+" "-" "+" "|"))
+
+(def key-up? (fn () (or (= KEY KEY_UP) (= KEY 59))))
+(def key-down? (fn () (or (= KEY KEY_DOWN) (= KEY 46))))
+(def key-left? (fn () (or (= KEY KEY_LEFT) (= KEY 44))))
+(def key-right? (fn () (or (= KEY KEY_RIGHT) (= KEY 47))))
+; ` is the key under ESC's label
+(def key-back? (fn () (or (= KEY KEY_ESC) (= KEY 96))))
+
+; Row 0: the title, and the time connected on the right.
+(def title
+  (fn (text)
+    (let ((mn (floor (/ UPTIME 60))) (clock (str-fmt "%02d:%02d" mn (- UPTIME (* mn 60)))))
+      (attr A_BOLD)
+      (print-at 0 0 text)
+      (attr 0)
+      (attr A_DIM)
+      (print-at 0 (- W (str-len clock)) clock)
+      (attr 0))))
+
+; The last row: what the keys do here.
+(def hint-bar
+  (fn (text)
+    (attr A_REV)
+    (fill (- H 1) 0 1 W " ")
+    (print-at (- H 1) 0 (str-sub text 0 (math-min W (str-len text))))
+    (attr 0)))
+
+(def key-label
+  (fn (row col key label)
+    (fg 2)
+    (print-at row col "[")
+    (fg 15)
+    (print-at row (+ col 1) key)
+    (fg 2)
+    (print-at row (+ col 2) "]")
+    (fg 15)
+    (print-at row (+ col 4) label)
+    (fg C_DEFAULT)))

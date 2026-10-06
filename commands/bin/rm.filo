@@ -1,0 +1,54 @@
+; rm [-fRr] file...: each file removed; -r (or -R) a directory with all
+; under it, deepest first; -f says nothing of files that are not there and
+; leaves the status alone for them. -i (asking) is not here.
+
+(def usage "usage: rm [-fRr] file...")
+(def has (fn (opts letter) (> (length (filter (fn (o) (letv (l val) o (= l letter))) opts)) 0)))
+(def base (fn (p)
+  (let ((parts (filter (fn (s) (> (byte-len s) 0)) (str-split "/" p))))
+    (if (= (length parts) 0) "/" (nth parts (- (length parts) 1))))))
+(def join (fn (dir name)
+  (if (= (byte-at dir (- (byte-len dir) 1)) 47) (str-concat dir name) (str-concat dir "/" name))))
+(def kind (fn (p) (let ((s (file-stat p))) (if (is-nil s) "" (letv (k z t o) s k)))))
+
+(def entries (fn (dir)
+  (letv (out next)
+        (iterate (fn (st)
+                   (letv (out next) st
+                     (if (is-nil next) (list)
+                       (letv (es nx) (dir-read dir next)
+                         (tuple (list-concat out (map (fn (e) (letv (n k) e (join dir n))) es)) nx)))))
+                 (tuple (list) 0))
+    out)))
+
+; a tree removed deepest first: a stack of (path children-done)
+(def remove-tree (fn (top)
+  (letv (stack ok)
+        (iterate (fn (st)
+                   (letv (stack ok) st
+                     (if (= (length stack) 0) (list)
+                       (letv (p done) (nth stack 0)
+                         (cond ((not (= (kind p) "dir")) (tuple (tail stack) (and (rm p) ok)))
+                               (done (tuple (tail stack) (and (rmdir p) ok)))
+                               (else (tuple (list-concat (map (fn (c) (tuple c #f)) (entries p))
+                                                         (list-concat (list (tuple p #t)) (tail stack)))
+                                            ok)))))))
+                 (tuple (list (tuple top #f)) #t))
+    ok)))
+
+(def remove-one (fn (p force recursive)
+  (let ((k (kind p)) (b (base p)))
+    (cond ((or (= b ".") (= b ".."))
+           (do (err-write "rm: \".\" and \"..\" may not be removed\n") #f))
+          ((= k "") (if force #t (do (err-write "rm: " p ": No such file or directory\n") #f)))
+          ((and (= k "dir") (not recursive)) (do (err-write "rm: " p ": is a directory\n") #f))
+          ((= k "dir") (remove-tree p))
+          (else (rm p))))))
+
+(letv (opts files bad) (getopt ARGS "fRri")
+  (cond ((not (= bad "")) (do (err-write "rm: bad option -" bad "\n" usage "\n") (exit-status 1)))
+        ((has opts "i") (do (err-write "rm: -i is not supported here (nothing to ask with)\n") (exit-status 1)))
+        ((and (= (length files) 0) (not (has opts "f"))) (do (err-write usage "\n") (exit-status 1)))
+        (else
+          (let ((force (has opts "f")) (recursive (or (has opts "r") (has opts "R"))))
+            (exit-status (fold (fn (st p) (if (remove-one p force recursive) st 1)) 0 files))))))

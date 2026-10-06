@@ -1,0 +1,87 @@
+; fold [-bs] [-w width] [file...]: long lines cut to width columns (80).
+; Columns as a terminal counts them: a tab to the next multiple of 8, a
+; backspace one back, a carriage return to the start, a wide character two;
+; -b counts bytes instead. -s cuts after the last blank before the width
+; when there is one. A last line without a newline gets none.
+
+(def usage "usage: fold [-bs] [-w width] [file...]")
+
+(def opt (fn (opts letter default)
+  (fold (fn (v o) (letv (l val) o (if (= l letter) val v))) default opts)))
+(def has (fn (opts letter) (> (length (filter (fn (o) (letv (l val) o (= l letter))) opts)) 0)))
+
+; the column after one character at col (its code point, or a byte with -b)
+(def advance (fn (col cp bytes)
+  (cond (bytes (+ col 1))
+        ((= cp 9) (* 8 (+ (floor (/ col 8)) 1)))
+        ((= cp 8) (math-max 0 (- col 1)))
+        ((= cp 13) 0)
+        (else (+ col (rune-width cp))))))
+
+(def blank (fn (cp) (or (= cp 32) (= cp 9))))
+
+; how many bytes the character cp at byte p of text took: one for a byte
+; that is no character (decoded as U+FFFD)
+(def rune-len (fn (text p cp)
+  (if (and (= cp 65533) (not (= (byte-sub text p (+ p 3)) (utf8-encode 65533)))) 1 (byte-len (utf8-encode cp)))))
+
+; the characters (or bytes) of s, and the column they reach from 0
+(def units (fn (s bytes) (if bytes (byte-list s) (utf8-runes s))))
+(def width-of (fn (s bytes) (fold (fn (c cp) (advance c cp bytes)) 0 (units s bytes))))
+
+; where a window of text from at ends: about 4 KB, never inside a character
+(def window (fn (text at)
+  (iterate (fn (e) (if (or (>= e (byte-len text)) (<= e (+ at 1)) (not (= (u32-and (byte-at text e) 192) 128))) (list) (- e 1)))
+           (math-min (byte-len text) (+ at 4096)))))
+
+; one line (without its newline) cut, a window of it decoded at a time.
+; The piece not yet written is text from start; (p start col blank-end):
+; the byte at hand, where the piece starts, its column, and the byte past
+; its last blank (not past start: none)
+(def fold-line (fn (text width bytes blanks)
+  (let ((step (fn (st cp)
+                (letv (p start col bend) st
+                  (let ((n (if bytes 1 (rune-len text p cp))) (next (advance col cp bytes)))
+                    (let ((after (if (and blanks (blank cp)) (+ p n) -1)))
+                      (cond ((or (<= next width) (= p start)) (tuple (+ p n) start next (math-max bend after)))
+                            ((and blanks (> bend start))
+                             (do (out-write (byte-sub text start bend) "\n")
+                                 (tuple (+ p n) bend (advance (width-of (byte-sub text bend p) bytes) cp bytes) (math-max bend after))))
+                            (else (do (out-write (byte-sub text start p) "\n")
+                                      (tuple (+ p n) p (advance 0 cp bytes) (math-max p after)))))))))))
+    (letv (p start col bend)
+          (iterate (fn (st)
+                     (letv (p start col bend) st
+                       (if (>= p (byte-len text)) (list)
+                         (fold step st (units (byte-sub text p (window text p)) bytes)))))
+                   (tuple 0 0 0 0))
+      (out-write (byte-sub text start))))))
+
+(def fold-source (fn (next width bytes blanks)
+  (iterate (fn (go)
+             (let ((l (next)))
+               (if (is-nil l) (list)
+                 (let ((nl (= (byte-at l (- (byte-len l) 1)) 10)))
+                   (do (fold-line (if nl (byte-sub l 0 (- (byte-len l) 1)) l) width bytes blanks)
+                       (out-write (if nl "\n" ""))
+                       #t)))))
+           #t)))
+
+(letv (opts files bad) (getopt ARGS "bsw:")
+  (let ((w (opt opts "w" "80")))
+    (cond ((not (= bad "")) (do (err-write "fold: bad option -" bad "\n" usage "\n") (exit-status 1)))
+          ((or (= (byte-len w) 0) (not (is-nil (re-match (re-compile "[^0-9]") w))) (= (number w) 0))
+           (do (err-write "fold: the width is a whole number above 0\n") (exit-status 1)))
+          (else
+            (let ((width (number w)) (bytes (has opts "b")) (blanks (has opts "s")))
+              (if (= (length files) 0)
+                (fold-source (fn () (in-line)) width bytes blanks)
+                (exit-status
+                  (fold (fn (worst name)
+                          (if (= name "-")
+                            (do (fold-source (fn () (in-line)) width bytes blanks) worst)
+                            (let ((h (file-open name)))
+                              (if (= (type-of h) "string")
+                                (do (err-write "fold: " name ": " h "\n") 1)
+                                (do (fold-source (fn () (file-line h)) width bytes blanks) (file-close h) worst)))))
+                        0 files))))))))

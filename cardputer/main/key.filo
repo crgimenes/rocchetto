@@ -1,0 +1,5 @@
+(map
+  (fn (item)
+    (letv (code key label target) item
+      (if (or (= KEY code) (= KEY (- code 32))) (exec target))))
+  items)

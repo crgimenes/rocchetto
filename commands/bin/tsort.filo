@@ -1,0 +1,70 @@
+; tsort [file]: the words of the file (or of the input, - or none) taken
+; two by two, "a b" saying a comes before b, and every word written once in
+; an order that keeps them all; "a a" is a word alone. Ties go in the order
+; the words first appeared. A cycle is said, broken at one of its words, and
+; makes $? 1.
+
+(def usage "usage: tsort [file]")
+(def is-stdin (fn (src) (and (= (type-of src) "string") (= src "-"))))
+(def opened (fn (name) (if (= name "-") "-" (file-open name))))
+(def blanks (list "\t" "\r" "\v" "\f" "\n"))
+(def words-in (fn (line)
+  (filter (fn (w) (> (byte-len w) 0)) (str-split " " (fold (fn (s b) (str-replace b " " s)) line blanks)))))
+(def member (fn (x l) (fold (fn (found y) (or found (= x y))) #f l)))
+
+(def whole-of (fn (src)
+  (str-join "" (iterate (fn (acc) (let ((b (if (is-stdin src) (in-read 65536) (file-read src 65536))))
+                                    (if (is-nil b) (list) (list-append acc b))))
+                        (list)))))
+(def read-words (fn (src) (words-in (whole-of src))))
+
+(def pairs (fn (ws)
+  (map (fn (i) (tuple (nth ws (* 2 i)) (nth ws (+ (* 2 i) 1)))) (range 0 (/ (length ws) 2)))))
+
+; a word of left every one of whose before is gone, the first such
+(def ready (fn (left edges)
+  (fold (fn (got n) (if (not (is-nil got)) got
+                      (if (member n (map (fn (e) (letv (a b) e b)) edges)) (list) (list n))))
+        (list) left)))
+
+; walking back from n along the edges until a word comes again: a cycle
+(def cycle-from (fn (n edges)
+  (letv (path at)
+        (iterate (fn (st)
+                   (letv (path at) st
+                     (if (member at path) (list)
+                       (tuple (list-append path at)
+                              (fold (fn (got e) (letv (a b) e (if (and (= got "") (= b at)) a got))) "" edges)))))
+                 (tuple (list) n))
+    (fold (fn (acc w) (if (or (> (length acc) 0) (= w at)) (list-append acc w) acc)) (list) path))))
+
+(def order (fn (nodes edges)
+  (iterate (fn (st)
+             (letv (left edges cyclic) st
+               (if (= (length left) 0) (list)
+                 (let ((r (ready left edges)))
+                   (let ((n (if (is-nil r) (nth (cycle-from (nth left 0) edges) 0) (nth r 0))))
+                     (do (if (is-nil r)
+                           (do (err-write "tsort: cycle in data\n")
+                               (map (fn (w) (err-write "tsort: " w "\n")) (cycle-from (nth left 0) edges)))
+                           #f)
+                         (out-write n "\n")
+                         (tuple (filter (fn (x) (not (= x n))) left)
+                                (filter (fn (e) (letv (a b) e (not (or (= a n) (= b n))))) edges)
+                                (or cyclic (is-nil r)))))))))
+           (tuple nodes edges #f))))
+
+(def main (fn ()
+  (if (> (length ARGS) 1) (do (err-write usage "\n") (exit-status 2))
+    (let ((name (if (= (length ARGS) 1) (nth ARGS 0) "-")))
+      (let ((src (opened name)))
+        (if (and (= (type-of src) "string") (not (is-stdin src)))
+          (do (err-write "tsort: " name ": " src "\n") (exit-status 1))
+          (let ((ws (read-words src)))
+            (if (= (% (length ws) 2) 1) (do (err-write "tsort: odd data count\n") (exit-status 1))
+              (let ((nodes (fold (fn (acc w) (if (member w acc) acc (list-append acc w))) (list) ws))
+                    (edges (filter (fn (e) (letv (a b) e (not (= a b)))) (pairs ws))))
+                (letv (left rest cyclic) (order nodes edges)
+                  (exit-status (if cyclic 1 0))))))))))))
+
+(main)

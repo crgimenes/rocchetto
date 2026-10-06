@@ -1,0 +1,12 @@
+; Turning back on itself is the one move a snake cannot make. The first
+; arrow is also what starts a game.
+(if (or (key-up?) (key-down?) (key-left?) (key-right?) (= KEY 119) (= KEY 115) (= KEY 97) (= KEY 100))
+  (set started #t))
+(cond
+  ((or (key-up?) (= KEY 119)) (if (not (= dir DOWN)) (set want UP)))
+  ((or (key-down?) (= KEY 115)) (if (not (= dir UP)) (set want DOWN)))
+  ((or (key-left?) (= KEY 97)) (if (not (= dir RIGHT)) (set want LEFT)))
+  ((or (key-right?) (= KEY 100)) (if (not (= dir LEFT)) (set want RIGHT)))
+  ((or (= KEY 114) (= KEY 82)) (reset))
+  ((key-back?) (exec "main"))
+  (else #f))

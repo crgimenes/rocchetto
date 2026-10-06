@@ -1,0 +1,33 @@
+; cksum [file...]: each file's POSIX checksum and size, and its name; no
+; file, the input. A file that cannot be read is said and the rest go on.
+; The CRC of polynomial 04C11DB7, high bit first, over the bytes and then
+; the length, low byte first, complemented.
+(def poly 79764919)
+(def table
+  (map (fn (i)
+         (fold (fn (c k) (if (= (u32-and c 2147483648) 0) (u32-shl c 1) (u32-xor (u32-shl c 1) poly)))
+               (u32-shl i 24) (range 0 8)))
+       (range 0 256)))
+(def step (fn (crc b) (u32-xor (u32-shl crc 8) (nth table (u32-xor (u32-shr crc 24) b)))))
+(def with-len (fn (crc n) (if (= n 0) crc (with-len (step crc (u32-and n 255)) (floor (/ n 256))))))
+
+; the CRC and size of what next hands over, a piece at a time, nil at the end
+(def sum (fn (next)
+  (iterate (fn (st)
+             (let ((b (next)))
+               (if (is-nil b) (list)
+                 (list (fold step (nth st 0) (byte-list b)) (+ (nth st 1) (byte-len b))))))
+           (list 0 0))))
+
+(def report (fn (st name)
+  (out-write (u32-not (with-len (nth st 0) (nth st 1))) " " (nth st 1) name "\n")))
+
+(def one (fn (name)
+  (let ((h (file-open name)))
+    (if (= (type-of h) "string")
+      (do (err-write "cksum: " name ": " h "\n") 1)
+      (do (report (sum (fn () (file-read h 65536))) (str-concat " " name)) (file-close h) 0)))))
+
+(if (= (length ARGS) 0)
+  (report (sum (fn () (in-read 65536))) "")
+  (exit-status (fold (fn (worst name) (math-max worst (one name))) 0 ARGS)))

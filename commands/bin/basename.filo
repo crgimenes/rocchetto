@@ -1,0 +1,22 @@
+; basename path [suffix]: the last part of a path, as POSIX's, its slashes
+; at the end gone first; the suffix goes too when it is not all of it.
+(def trim-slashes
+  (fn (s)
+    (let ((n (str-len s)))
+      (if (and (> n 1) (= (str-sub s (- n 1)) "/"))
+        (trim-slashes (str-sub s 0 (- n 1)))
+        s))))
+
+(if (= (length ARGS) 0)
+  (echo "usage: basename <path> [<suffix>]")
+  (let ((p (trim-slashes (nth ARGS 0))))
+    (if (= p "/")
+      (echo "/")
+      (let ((parts (str-split "/" p))
+            (base (nth parts (- (length parts) 1)))
+            (suf (if (> (length ARGS) 1) (nth ARGS 1) ""))
+            (bn (str-len base))
+            (sn (str-len suf)))
+        (if (and (> sn 0) (> bn sn) (= (str-sub base (- bn sn)) suf))
+          (echo (str-sub base 0 (- bn sn)))
+          (echo base))))))

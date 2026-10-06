@@ -1,0 +1,116 @@
+; Snake for the Cardputer: the shell's snake-filo with one-column cells and
+; plain characters, since the panel draws ASCII only. The state is the
+; screen, as there: the head reads the cell it enters, and each segment's tag
+; says which way the next one is.
+
+(keep-canvas)
+
+(def STEP_MS 150)
+(def W_MIN 6)
+(def H_MIN 3)
+
+(def UP 0)
+(def DOWN 1)
+(def LEFT 2)
+(def RIGHT 3)
+
+(def HEAD 64) ; @
+(def FOOD 42) ; *
+(def EMPTY 32)
+
+(def hx 0)
+(def hy 0)
+(def tx 0)
+(def ty 0)
+(def dir RIGHT)
+(def want RIGHT)
+(def score 0)
+(def best 0)
+(def over #f)
+; the field is nine cells from the head to a wall: the game waits for the
+; first key instead of running into one
+(def started #f)
+(def won #f)
+(def cramped #f)
+(def waited 0)
+(def fw 0)
+(def fh 0)
+
+; Row 0 is the score and the box takes every row under it.
+(def field-w (fn () (- W 2)))
+(def field-h (fn () (- H 3)))
+
+(def step-x (fn (d) (cond ((= d LEFT) -1) ((= d RIGHT) 1) (else 0))))
+(def step-y (fn (d) (cond ((= d UP) -1) ((= d DOWN) 1) (else 0))))
+
+(def paint
+  (fn (x y glyph colour mark)
+    (fg colour)
+    (tag mark)
+    (print-at (+ y 2) (+ x 1) glyph)
+    (tag 0)
+    (fg C_DEFAULT)))
+
+(def drawn-at (fn (x y) (cell-at (+ y 2) (+ x 1))))
+(def mark-at (fn (x y) (tag-at (+ y 2) (+ x 1))))
+
+(def FOOD_TRIES 200)
+
+(def place-food
+  (fn ()
+    (fold
+      (fn (found try)
+        (if found
+          found
+          (let ((x (random fw)) (y (random fh)))
+            (if (= (drawn-at x y) EMPTY) (do (paint x y "*" 9 0) #t) #f))))
+      #f
+      (range FOOD_TRIES))))
+
+(def reset
+  (fn ()
+    (set fw (field-w))
+    (set fh (field-h))
+    (set cramped (or (< fw W_MIN) (< fh H_MIN)))
+    (set dir RIGHT)
+    (set want RIGHT)
+    (set score 0)
+    (set over #f)
+    (set won #f)
+    (set started #f)
+    (set waited 0)
+    (if (not cramped)
+      (do
+        (fill 1 0 (+ fh 2) (+ fw 2) " ")
+        (box 1 0 (+ fh 2) (+ fw 2) single)
+        (set hx (floor (/ fw 2)))
+        (set hy (floor (/ fh 2)))
+        (set tx hx)
+        (set ty hy)
+        (paint hx hy "@" 10 0)
+        (place-food)))))
+
+(def step
+  (fn ()
+    (let ((nx (+ hx (step-x dir)))
+          (ny (+ hy (step-y dir)))
+          (seen (drawn-at nx ny))
+          (ate (= seen FOOD))
+          (free (or (= seen EMPTY) ate (and (= nx tx) (= ny ty)))))
+      (if (not free)
+        (set over #t)
+        (do
+          (paint hx hy "o" 2 (+ dir 1))
+          (if (not ate)
+            (let ((d (- (mark-at tx ty) 1)))
+              (paint tx ty " " C_DEFAULT 0)
+              (set tx (+ tx (step-x d)))
+              (set ty (+ ty (step-y d)))))
+          (paint nx ny "@" 10 0)
+          (set hx nx)
+          (set hy ny)
+          (if ate
+            (do
+              (set score (+ score 1))
+              (if (> score best) (set best score))
+              (if (not (place-food)) (do (set over #t) (set won #t))))))))))
