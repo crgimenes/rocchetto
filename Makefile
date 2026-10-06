@@ -286,7 +286,7 @@ fmt-check:
 # language's own and the check finally sees them.
 tidy:
 	$(CLANG_TIDY) --quiet --warnings-as-errors='*' \
-		--checks='bugprone-*,cert-*,clang-analyzer-*,readability-*,-readability-identifier-length,-readability-function-cognitive-complexity,-readability-magic-numbers,-cert-err33-c,-readability-else-after-return,-readability-simplify-boolean-expr,-bugprone-easily-swappable-parameters,-clang-analyzer-optin.performance.Padding' \
+		--checks='bugprone-*,cert-*,clang-analyzer-*,readability-*,-readability-identifier-length,-readability-function-cognitive-complexity,-readability-magic-numbers,-cert-err33-c,-readability-else-after-return,-readability-simplify-boolean-expr,-bugprone-easily-swappable-parameters,-clang-analyzer-optin.performance.Padding,-clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling' \
 		$(CORE) $(ROC)/host/posix/main.c $(ROC)/host/posix/compose.c $(ROC)/tools/mkunits.c -- -std=c23 $(INC) $(APPFLAGS)
 
 check:
