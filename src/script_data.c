@@ -685,8 +685,10 @@ static int b_getopt(filo_ctx *ctx, const filo_value *a, uint32_t n, filo_value *
         }
     }
     filo_value parts[3] = {{0}, {0}, {0}};
+    /* no words, no pointer: w is NULL then, and NULL + 0 is still UB */
+    const filo_value *rest = i < nw ? w + i : NULL;
     if (filo_list(ctx, opts, no, &parts[0]) != FILO_OK ||
-        filo_list(ctx, w + (i < nw ? i : nw), nw - (i < nw ? i : nw), &parts[1]) != FILO_OK ||
+        filo_list(ctx, rest, i < nw ? nw - i : 0, &parts[1]) != FILO_OK ||
         new_string(ctx, (const uint8_t *)bad, bad[0] != 0 ? 1 : 0, "getopt", &parts[2]) !=
             FILO_OK) {
         return FILO_ERR;

@@ -30,7 +30,9 @@ EDT ?= $(ROC)/../edt
 WASM_OPT ?= wasm-opt
 # the layer's own headers (-I...), when a build adds one
 EXTRA_INC ?=
-INC = -I$(ROC)/src -I$(TERM_SRC) -I$(CW_SRC) -I$(FILO) -Ibuild $(EXTRA_INC)
+# glibc and musl hide POSIX (cfmakeraw, sigaction, tm_gmtoff) under a strict
+# -std; the BSDs and macOS ignore the macro.
+INC = -D_DEFAULT_SOURCE -I$(ROC)/src -I$(TERM_SRC) -I$(CW_SRC) -I$(FILO) -Ibuild $(EXTRA_INC)
 CFLAGS = -std=c23 -O2 $(WARN) $(APPFLAGS) $(INC)
 
 # The version is whatever git says, written to a header so that a new tag
@@ -82,6 +84,12 @@ HDRS = build/version.h $(FILO)/filo.h $(wildcard $(ROC)/src/*.h) $(CW_SRC)/mars.
 	$(FILO)/fbc_dump.h $(FILO)/fbc_decompile.h $(FILO)/filo_fmt.h $(wildcard $(TERM_SRC)/*.h) \
 	$(EXTRA_HDRS)
 
+# The tree goes into the binary with C23's #embed where the compiler has it
+# (clang 19, GCC 15), and as plain byte arrays where it does not.
+HASH := \#
+EMBED ?= $(shell printf '$(HASH)embed "%s"\n' '$(abspath $(ROC)/Makefile)' | \
+	$(CC) -std=c23 -E -x c - >/dev/null 2>&1 || echo --bytes)
+
 # The tree /lib/roc is: this repository's lib/ (the help, the Filo API) and
 # whatever roots a layer adds (its screens). The commands of /bin, as
 # source: compiled into bin/NAME and carried that way, never as the .filo.
@@ -100,7 +108,7 @@ UNITS = build/units/.built
 # at load, as it would refuse their source.
 $(GEN_SRC): $(SCREENS) $(COMMANDS) $(ROC)/tools/embed.sh
 	@mkdir -p build
-	sh $(ROC)/tools/embed.sh $(TREE_ROOTS) $(COMMAND_ROOTS) > $@
+	sh $(ROC)/tools/embed.sh $(EMBED) $(TREE_ROOTS) $(COMMAND_ROOTS) > $@
 
 # The units are compiled with every app this build can have, so any build
 # can carry them: one without an app refuses that app's screens at load.
@@ -158,7 +166,7 @@ $(foreach f,$(APP_FBBS),$(eval $(call app_copy,$(f))))
 # /bin holds the programs, not the sources they were compiled from.
 $(GEN): $(SCREENS) $(ROC)/tools/embed.sh $(UNITS) $(APPS_TREE)
 	@mkdir -p build build/apps
-	sh $(ROC)/tools/embed.sh $(TREE_ROOTS) build/units build/apps > $@
+	sh $(ROC)/tools/embed.sh $(EMBED) $(TREE_ROOTS) build/units build/apps > $@
 
 # The Cardputer carries its own screens, drawn for its 20x8 ASCII panel:
 # lib/bin (the help), its commands compiled from commands/, the rest from
@@ -176,7 +184,7 @@ $(CP_TREE): $(SCREENS) $(CARDPUTER)
 	@touch $@
 
 $(CP_SRC): $(CP_TREE) $(COMMANDS) $(ROC)/tools/embed.sh
-	sh $(ROC)/tools/embed.sh build/cardputer-tree $(ROC)/commands > $@
+	sh $(ROC)/tools/embed.sh $(EMBED) build/cardputer-tree $(ROC)/commands > $@
 
 build/mkunits-cardputer: $(ALLSRC) $(CP_SRC) $(HDRS) $(ROC)/tools/mkunits.c
 	$(CC) -std=c23 -O2 $(WARN) $(ALLAPPS) $(INC) -o $@ $(ALLSRC) $(CP_SRC) $(ROC)/tools/mkunits.c
