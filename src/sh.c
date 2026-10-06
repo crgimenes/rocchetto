@@ -663,9 +663,9 @@ static long long ar_primary(arith *a) {
     if (*p == '$') {
         p++;
     }
-    bool braced = false;
+    bool in_braces = false;
     if (p < a->end && *p == '{') {
-        braced = true;
+        in_braces = true;
         p++;
     }
     size_t n = 0;
@@ -676,11 +676,11 @@ static long long ar_primary(arith *a) {
             n++;
         }
     }
-    if (n == 0 || (braced && (p + n >= a->end || p[n] != '}'))) {
+    if (n == 0 || (in_braces && (p + n >= a->end || p[n] != '}'))) {
         ar_fail(a, "arithmetic expression: expecting primary");
         return 0;
     }
-    a->p = p + n + (braced ? 1U : 0U);
+    a->p = p + n + (in_braces ? 1U : 0U);
     return ar_name(a, p, n);
 }
 
@@ -1785,9 +1785,9 @@ bool sh_match(const char *pat, const char *name) {
     while (*pat != '\0') {
         char c = *pat;
         if (c == '*') {
-            while (*pat == '*') {
+            do {
                 pat++;
-            }
+            } while (*pat == '*');
             if (*pat == '\0') {
                 return true;
             }
