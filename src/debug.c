@@ -1692,8 +1692,7 @@ static void draw_help(canvas *c, int32_t w, int32_t h) {
     (void)put_hint(c, y, at, "h", " back");
     int32_t last = min32(D.help_top + nrows, (int32_t)HELP_LINES);
     char where[48];
-    (void)snprintf(where, sizeof(where), "help  %d-%d of %d", D.help_top + 1, last,
-                   HELP_LINES);
+    (void)snprintf(where, sizeof(where), "help  %d-%d of %d", D.help_top + 1, last, HELP_LINES);
     cv_pen(c, COL_WHERE, COL_BAR, 0);
     (void)put(c, y, w - (int32_t)strlen(where) - 1, where);
 }
