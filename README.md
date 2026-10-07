@@ -43,6 +43,17 @@ the commands that are its own, the effects between screens, and what it
 does with the host's stream. Its tests include `test/test_roc.c`
 (`ROC_TEST_NO_MAIN`) and call `roc_tests()` before their own.
 
+## Install
+
+```
+brew install crgimenes/tap/rocchetto
+```
+
+installs the shell. Or take a binary from the
+[releases](https://github.com/crgimenes/rocchetto/releases): macOS
+(universal, arm64 and x86_64) and Linux (static, amd64 and arm64), nothing
+else to install.
+
 ## Build
 
 ```
@@ -52,6 +63,7 @@ make wasm          # build/roc.wasm: CLANG with the wasm32 target, LLD, wasm-opt
 make wasm-test     # the wasm under Node, the page's imports faked
 make esp32         # the Cardputer firmware (arduino-cli)
 make qa            # all of the above but the firmware, clang-format, clang-tidy, cppcheck
+make dist          # the release binaries in dist/ (needs zig for Linux)
 ```
 
 The repositories it builds from live beside it: `FILO ?= ../clang_filo`,

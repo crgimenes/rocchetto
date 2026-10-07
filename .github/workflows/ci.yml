@@ -38,7 +38,7 @@ jobs:
         with:
           repository: crgimenes/edt
           path: edt
-      - run: make -C rocchetto rocchetto compose small test
+      - run: make -C rocchetto rocchetto compose small test smoke
 
   # The browser's build under Node, and the lint, with LLVM's own tools.
   wasm-lint:

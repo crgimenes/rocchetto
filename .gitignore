@@ -7,3 +7,5 @@ host/esp32/src/
 CLAUDE.md
 project.md
 TODO.md
+dist/
+release.sh

@@ -199,9 +199,13 @@ int main(int argc, char **argv) {
     const char *home = NULL;
     int i = 1;
     while (i < argc) {
+        if (strcmp(argv[i], "--version") == 0) {
+            printf("rocchetto %s\n", ROC_VERSION);
+            return 0;
+        }
         if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
             printf("usage: rocchetto [--home <file>] [root-dir]\n"
-                   "Serves the roc shell over the tree rooted at root-dir\n"
+                   "Runs the rocchetto shell over the tree rooted at root-dir\n"
                    "(default: $ROC_ROOT or '.').\n"
                    "The best root is a Hugo output tree (a site's public/,\n"
                    "after running 'hugo'): its mshindex.tsv gives the same\n"
@@ -209,6 +213,7 @@ int main(int argc, char **argv) {
                    "works too via a '.index' from tools/mkindex.sh.\n"
                    "--home <file>  keep the user's home in this file between\n"
                    "               runs (what the browser does in its storage).\n"
+                   "--version      the version, and nothing else\n"
                    "ROC_HOST_NAME  the prompt's @ (default: this machine's name)\n"
                    "ROC_SITE_BASE  the origin the tree's links are relative to\n");
             return 0;

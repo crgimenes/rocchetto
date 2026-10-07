@@ -188,7 +188,19 @@ all: rocchetto
 rocchetto: $(CORE) $(FILOSRC) $(GEN) $(HDRS) $(ROC)/host/posix/main.c
 	$(CC) $(CFLAGS) -o $@ $(CORE) $(FILOSRC) $(GEN) $(ROC)/host/posix/main.c
 
-.PHONY: all test footprint small fmt fmt-check tidy check fuzz clean all qa wasm wasm-test compose lib FORCE
+# What release.sh publishes (VERSION is its tag, which the binary reports):
+# rocchetto for macOS and for Linux.
+DIST_DIR ?= dist
+dist: ROC_VERSION := $(or $(VERSION),$(ROC_VERSION))
+dist: $(CORE) $(FILOSRC) $(GEN) $(HDRS) $(ROC)/host/posix/main.c
+	sh $(FILO_TERM)/tools/dist.sh $(DIST_DIR) rocchetto $(CFLAGS) \
+		$(CORE) $(FILOSRC) $(GEN) $(ROC)/host/posix/main.c
+
+# The binary as shipped, on a terminal: it starts, prompts, and exits.
+smoke: rocchetto
+	sh $(FILO_TERM)/tools/smoke.sh ./rocchetto 'exit\r'
+
+.PHONY: all test footprint small fmt fmt-check tidy check fuzz clean all qa smoke dist wasm wasm-test compose lib FORCE
 
 # The composing tool: the same runtime, screens read from a directory and
 # redrawn as they are saved.
@@ -305,10 +317,10 @@ fuzz: $(CORE) $(FILOSRC) $(GEN) $(HDRS) $(ROC)/fuzz/fuzz_input.c $(ROC)/fuzz/fuz
 		-o build/fuzz_home $(addprefix $(ROC)/src/,home.c ufs.c vfs.c) $(ROC)/fuzz/fuzz_home.c
 	./build/fuzz_home -max_total_time=$(FUZZ_SECONDS) -timeout=10 -max_len=4096
 
-qa: rocchetto compose small fmt-check test tidy check wasm-test
+qa: rocchetto compose small fmt-check test smoke tidy check wasm-test
 
 clean:
-	rm -rf rocchetto compose build
+	rm -rf rocchetto compose build dist
 
 # What a build costs in RAM, by part. The same program under two
 # configurations, which is the point of roc_config.h.
