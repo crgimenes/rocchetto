@@ -3,3 +3,7 @@ compose
 build/
 web/node_modules/
 host/esp32/src/
+# planning, kept local
+CLAUDE.md
+project.md
+TODO.md
