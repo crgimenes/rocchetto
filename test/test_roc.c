@@ -183,9 +183,9 @@ static roc *boot_menu(mock_host *h) {
    editor ones. The shell itself opens at home (test_shell_starts_at_home). */
 static roc *boot(mock_host *h) {
     roc *m = boot_menu(h);
-#if ROC_APP_BOARD
-    send(m, "s\r"); /* the shell's front screen first: S is the shell */
-#endif
+    if (roc_layer_spec.home != NULL) {
+        send(m, "s\r"); /* a layer's front screen first: S is the shell */
+    }
     drain(m);
     strcpy(m->cwd, "/"); /* quietly: no line in the history, no prompt printed */
     return m;
@@ -1607,11 +1607,7 @@ static void test_user_name(void) {
     roc_feed(&M, h.req_id, (const uint8_t *)test_index, strlen(test_index));
     roc_feed_eof(&M, h.req_id);
     drain(&M);
-#if ROC_APP_BOARD
-    send(&M, "s\r");
-#else
-    send(&M, "\r");
-#endif
+    send(&M, roc_layer_spec.home != NULL ? "s\r" : "\r");
     const char *o = drain(&M);
     CHECK(strstr(o, "ana@shell.test") != NULL);
     send(&M, "x\x1b[D"); /* prompt is 18 columns now, not 20 */
@@ -5509,9 +5505,9 @@ static void test_cardputer_screens(void) {
     tree_set_source(cp_files, cp_n);
     mock_host h;
     roc *m = boot_menu(&h);
-#if !ROC_APP_BOARD
-    screen_enter(m, "main"); /* no board to boot to: the firmware opens it */
-#endif
+    if (roc_layer_spec.home == NULL) {
+        screen_enter(m, "main"); /* no layer to boot to: the firmware opens it */
+    }
     roc_resize(m, 20, 8);
     drain(m);
     cp_on(m, "main");
@@ -7998,14 +7994,13 @@ static void test_screen_failed_key_recovers(void) {
     drain(m);
     send(m, "go\r");
     const char *o = drain(m);
-#if ROC_APP_BOARD
-    (void)o;
-    CHECK(strcmp(m->scr.name, "main") == 0);
-    CHECK(strstr(canvas_row(&m->cmp.target, 0), "boom at init") != NULL);
-#else
-    CHECK(m->t.napps == 0 && m->mode == ROC_MODE_LINE);
-    CHECK(strstr(o, "boom at init") != NULL);
-#endif
+    if (roc_layer_spec.home != NULL) {
+        CHECK(strcmp(m->scr.name, roc_layer_spec.home) == 0);
+        CHECK(strstr(canvas_row(&m->cmp.target, 0), "boom at init") != NULL);
+    } else {
+        CHECK(m->t.napps == 0 && m->mode == ROC_MODE_LINE);
+        CHECK(strstr(o, "boom at init") != NULL);
+    }
     tree_set_source(NULL, 0);
 }
 

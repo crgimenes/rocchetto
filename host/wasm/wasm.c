@@ -11,9 +11,9 @@
 __attribute__((import_module("env"), import_name("host_request"))) void
 host_request(uint32_t req_id, const char *path, size_t len);
 
-__attribute__((import_module("env"), import_name("host_live_open"))) void host_live_open(void);
+__attribute__((import_module("env"), import_name("host_stream_open"))) void host_stream_open(void);
 
-__attribute__((import_module("env"), import_name("host_live_close"))) void host_live_close(void);
+__attribute__((import_module("env"), import_name("host_stream_close"))) void host_stream_close(void);
 
 __attribute__((import_module("env"), import_name("host_term_resize"))) void
 host_term_resize(uint32_t cols, uint32_t rows);
@@ -73,14 +73,14 @@ static void req_cb(void *ctx, uint32_t req_id, const char *path) {
     host_request(req_id, path, strlen(path));
 }
 
-static void live_open_cb(void *ctx) {
+static void stream_open_cb(void *ctx) {
     (void)ctx;
-    host_live_open();
+    host_stream_open();
 }
 
-static void live_close_cb(void *ctx) {
+static void stream_close_cb(void *ctx) {
     (void)ctx;
-    host_live_close();
+    host_stream_close();
 }
 
 static void term_resize_cb(void *ctx, uint16_t cols, uint16_t rows) {
@@ -289,8 +289,8 @@ void roc_w_init(uint32_t cols, uint32_t rows, uint32_t flags, uint32_t idlen) {
         .host_name = site_name,
         .site_base = site_base,
         .request = req_cb,
-        .live_open = live_open_cb,
-        .live_close = live_close_cb,
+        .stream_open = stream_open_cb,
+        .stream_close = stream_close_cb,
         .term_resize = term_resize_cb,
         .pick_file = pick_file_cb,
         .store_put = store_put_cb,
@@ -357,18 +357,16 @@ WASM_EXPORT("roc_w_exited") uint32_t roc_w_exited(void) {
     return roc_exited(&M) ? 1U : 0U;
 }
 
-#if ROC_APP_LIVE
-WASM_EXPORT("roc_w_live_data") void roc_w_live_data(uint32_t len) {
+WASM_EXPORT("roc_w_stream_data") void roc_w_stream_data(uint32_t len) {
     if (len > sizeof(iobuf)) {
         len = (uint32_t)sizeof(iobuf);
     }
-    roc_live_data(&M, iobuf, len);
+    roc_stream_data(&M, iobuf, len);
 }
 
-WASM_EXPORT("roc_w_live_event") void roc_w_live_event(uint32_t event) {
-    roc_live_event(&M, event);
+WASM_EXPORT("roc_w_stream_event") void roc_w_stream_event(uint32_t event) {
+    roc_stream_event(&M, event);
 }
-#endif
 
 /* A file from the page: name then dest in iobuf, bytes through iobuf in
    chunks, then end. Returns 0 when refused (nothing more is expected). */

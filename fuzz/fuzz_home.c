@@ -18,7 +18,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     ufs_init(&U);
     vfs_init(&V);
     (void)vfs_add_path(&V, "/home/guest", 0, true);
-    size_t n = home_unpack(&U, &V, "/home/guest", data, size);
+    size_t n = home_unpack(&U, &V, "/home/guest", data, size, NULL);
     size_t i = 0;
     while (i < U.nfiles) {
         if (strncmp(U.files[i].path, "/home/guest/", 12) != 0 ||
@@ -31,6 +31,6 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
         __builtin_trap();
     }
     home_report rep;
-    (void)home_pack(&U, "/home/guest", out, sizeof(out), &rep);
+    (void)home_pack(&U, &V, "/home/guest", out, sizeof(out), &rep);
     return 0;
 }

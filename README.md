@@ -36,9 +36,12 @@ program that uses them does not load where they are not offered.
 
 A build that adds its own screens, commands and C (a BBS, say) sets `ROC`
 to this repository and the hooks `TREE_ROOTS`, `COMMAND_ROOTS`,
-`EXTEND_SRC`, `APP_BOARD`, `EXTRA_INC` and `TEST_SRC`, then includes this
-Makefile. Its tests include `test/test_roc.c` (`ROC_TEST_NO_MAIN`) and call
-`roc_tests()` before their own.
+`EXTEND_SRC`, `LAYER_SRC`, `EXTRA_INC` and `TEST_SRC`, then includes this
+Makefile. Its `EXTEND_SRC` defines `roc_layer_spec` (`src/roc.h`): the
+front screen the session opens on, a boot show, the targets of `exec` and
+the commands that are its own, the effects between screens, and what it
+does with the host's stream. Its tests include `test/test_roc.c`
+(`ROC_TEST_NO_MAIN`) and call `roc_tests()` before their own.
 
 ## Build
 

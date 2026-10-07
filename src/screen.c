@@ -384,9 +384,9 @@ static int b_exec(filo_ctx *ctx, const filo_value *a, uint32_t n, filo_value *ou
     return FILO_OK;
 }
 
-#if ROC_APP_BOARD
 /* (fx-next effect...): the effects the next exec plays on its way, from
-   what the terminal shows to what the new program paints. */
+   what the terminal shows to what the new program paints. The layer's:
+   only one with effects registers it. */
 static int b_fx_next(filo_ctx *ctx, const filo_value *a, uint32_t n, filo_value *out) {
     screen_state *s = &roc_of(ctx)->scr;
     if (n > SCR_FX_MAX) {
@@ -398,7 +398,7 @@ static int b_fx_next(filo_ctx *ctx, const filo_value *a, uint32_t n, filo_value 
         if (paint_arg_text(ctx, &a[i], &one) != FILO_OK) {
             return FILO_ERR;
         }
-        if (!copy_text(s->fx[s->nfx], SCR_FX_NAME, one) || !splash_has_effect(s->fx[s->nfx])) {
+        if (!copy_text(s->fx[s->nfx], SCR_FX_NAME, one) || !roc_layer_spec.effect(s->fx[s->nfx])) {
             return filo_fail2(ctx, "no such effect: ", s->fx[s->nfx]);
         }
         s->nfx++;
@@ -406,7 +406,6 @@ static int b_fx_next(filo_ctx *ctx, const filo_value *a, uint32_t n, filo_value 
     *out = filo_bool(true);
     return FILO_OK;
 }
-#endif
 
 /* ---- the context ---- */
 
@@ -511,9 +510,9 @@ void screen_context_init(roc *m, filo_ctx *ctx, uint8_t *persistent, size_t plen
     (void)filo_register_builtin(ctx, "blit", b_blit);
     (void)filo_register_builtin(ctx, "random", b_random);
     (void)filo_register_builtin(ctx, "exec", b_exec);
-#if ROC_APP_BOARD
-    (void)filo_register_builtin(ctx, "fx-next", b_fx_next);
-#endif
+    if (roc_layer_spec.effect != NULL && roc_layer_spec.transition != NULL) {
+        (void)filo_register_builtin(ctx, "fx-next", b_fx_next);
+    }
     (void)filo_register_builtin(ctx, "input-at", b_input_at);
     (void)filo_register_builtin(ctx, "input-text", b_input_text);
     (void)filo_register_builtin(ctx, "entry-count", b_entry_count);
@@ -999,21 +998,6 @@ typedef struct {
     void (*enter)(roc *m, const char *arg);
 } scr_target;
 
-#if ROC_APP_DOORS
-static void t_fire(roc *m, const char *arg) {
-    (void)arg;
-    fire_enter(m);
-}
-
-#endif
-
-#if ROC_APP_LIVE
-static void t_live(roc *m, const char *arg) {
-    (void)arg;
-    live_begin(m);
-}
-#endif
-
 static void t_read(roc *m, const char *arg) {
     roc_reader_begin_less(m, arg);
 }
@@ -1027,9 +1011,10 @@ static void t_logoff(roc *m, const char *arg) {
 
 static void t_shell(roc *m, const char *arg) {
     (void)arg;
-    /* the whole note is 45 columns: a narrow screen gets the short one */
-    roc_app_leave(m, m->t.cols >= 45 ? "a real shell \xe2\x80\x94 'exit' goes back to the board\r\n"
-                                     : "exit: back to the board\r\n");
+    /* the whole note is 47 columns: a narrow screen gets the short one */
+    roc_app_leave(m, m->t.cols >= 47
+                         ? "a real shell \xe2\x80\x94 'exit' goes back to the screens\r\n"
+                         : "exit: back to the screens\r\n");
 }
 
 /* back: to whatever was under the screen, saying nothing — an editor
@@ -1066,7 +1051,7 @@ static void t_man(roc *m, const char *arg) {
     const uint8_t *data = NULL;
     size_t len = 0;
     if (!roc_find_file(m, arg, &data, &len)) {
-        roc_flash(m, "that manual is not on this board");
+        roc_flash(m, "that manual is not here");
         return;
     }
     roc_show_bytes(m, true, arg, data, len);
@@ -1080,12 +1065,6 @@ static void t_edt(roc *m, const char *arg) {
 #endif
 
 static const scr_target targets[] = {
-#if ROC_APP_DOORS
-    {"fire", t_fire},
-#endif
-#if ROC_APP_LIVE
-    {"live", t_live},
-#endif
 #if ROC_APP_COREWAR
     {"fight", t_fight},
 #endif
@@ -1126,6 +1105,9 @@ static settle_result settle(roc *m) {
         *arg = '\0';
         arg++;
     }
+    if (roc_layer_spec.exec != NULL && roc_layer_spec.exec(m, next, arg != NULL ? arg : "")) {
+        return SETTLE_APP; /* the layer's own: it paints itself */
+    }
     size_t i = 0;
     while (i < sizeof(targets) / sizeof(targets[0])) {
         if (strcmp(targets[i].name, next) == 0) {
@@ -1148,9 +1130,11 @@ static settle_result settle(roc *m) {
     if (!ok) {
         return SETTLE_FAIL;
     }
-#if ROC_APP_BOARD
-    splash_transition(m, fx, nfx);
-#endif
+    const char *names[SCR_FX_MAX];
+    for (size_t k = 0; k < nfx; k++) {
+        names[k] = fx[k];
+    }
+    roc_layer_spec.transition(m, names, nfx); /* fx-next exists only with it */
     return SETTLE_APP;
 }
 
@@ -1265,14 +1249,14 @@ static void screen_on_key(void *ctx, uint32_t cp) {
         n++;
     }
     m->t.note[n] = '\0';
-#if ROC_APP_BOARD
-    if (strcmp(m->scr.name, "main") != 0 && screen_load(m, "main")) {
+    const char *home = roc_layer_spec.home;
+    if (home == NULL) {
+        roc_app_leave(m, m->scr.error); /* no front screen to fall back to: the prompt */
         return;
     }
-#else
-    roc_app_leave(m, m->scr.error); /* no front screen to fall back to: the prompt */
-    return;
-#endif
+    if (strcmp(m->scr.name, home) != 0 && screen_load(m, home)) {
+        return;
+    }
     m->t.note[0] = '\0';
     term_puts(&m->t, "\r\n");
     term_puts(&m->t, m->scr.error);

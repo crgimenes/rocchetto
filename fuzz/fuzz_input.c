@@ -16,7 +16,7 @@ static void req(void *ctx, uint32_t req_id, const char *path) {
     last_req = req_id;
 }
 
-static void live_nop(void *ctx) {
+static void stream_nop(void *ctx) {
     (void)ctx;
 }
 
@@ -45,8 +45,8 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
         .filo_extend = roc_host_extend,
         .ctx = NULL,
         .request = req,
-        .live_open = live_nop,
-        .live_close = live_nop,
+        .stream_open = stream_nop,
+        .stream_close = stream_nop,
         .term_resize = resize_nop,
         .scratch = scratch,
     };
@@ -54,16 +54,17 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     uint8_t drainbuf[TERM_OUT_CAP];
 
     if (data[0] % 4 == 3) {
-        /* fuzz the live frame parser: arbitrary bytes from the network */
+        /* the layer's stream: arbitrary bytes from the network (a BBS's
+           live frame parser, in its build; here only the handing over) */
         roc_feed_eof(&M, last_req);
         term_out_read(&M.t, drainbuf, sizeof(drainbuf));
         roc_input(&M, (const uint8_t *)"live\r", 5);
-        roc_live_event(&M, ROC_LIVE_EV_UP);
+        roc_stream_event(&M, 1); /* connected */
         term_out_read(&M.t, drainbuf, sizeof(drainbuf));
         size_t i = 1;
         while (i < size) {
             size_t chunk = size - i < 11 ? size - i : 11;
-            roc_live_data(&M, data + i, chunk);
+            roc_stream_data(&M, data + i, chunk);
             term_out_read(&M.t, drainbuf, sizeof(drainbuf));
             i += chunk;
         }

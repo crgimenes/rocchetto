@@ -1383,25 +1383,38 @@ static void profile_run(roc *m) {
 }
 
 /* The index is in, the home too when there is one: the shell opens. With no
-   board in the build there is nothing to open — the prompt is the session. */
+   layer's home in the build there is nothing to open — the prompt is the
+   session. */
 static void boot_done(roc *m) {
     profile_run(m);
     if (m->mode != ROC_MODE_LINE || m->exited) {
         return; /* the profile waits on something, or ended the session */
     }
-    if ((m->flags & ROC_F_PROMPT) != 0) {
+    if ((m->flags & ROC_F_PROMPT) != 0 || roc_layer_spec.home == NULL) {
         roc_prompt(m);
         return;
     }
-#if ROC_APP_BOARD
-    if ((m->flags & ROC_F_NO_SPLASH) != 0) {
-        screen_enter(m, "main"); /* the BBS face; the shell is one of its areas */
+#if ROC_APP_SCREENS
+    if ((m->flags & ROC_F_NO_SPLASH) == 0 && roc_layer_spec.boot != NULL) {
+        roc_layer_spec.boot(m); /* it ends on home */
         return;
     }
-    splash_enter(m); /* the screen scorches for an instant first */
+    screen_enter(m, roc_layer_spec.home); /* the layer's face; the shell is one of its areas */
 #else
     roc_prompt(m);
 #endif
+}
+
+void roc_stream_data(roc *m, const uint8_t *data, size_t n) {
+    if (roc_layer_spec.stream_data != NULL) {
+        roc_layer_spec.stream_data(m, data, n);
+    }
+}
+
+void roc_stream_event(roc *m, uint32_t event) {
+    if (roc_layer_spec.stream_event != NULL) {
+        roc_layer_spec.stream_event(m, event);
+    }
 }
 
 void roc_feed_eof(roc *m, uint32_t req_id) {
@@ -1628,10 +1641,10 @@ static void handle_rune(roc *m, uint32_t cp) {
                 roc_prompt(m);
                 return;
             }
-#if ROC_APP_BOARD
-            if (m->indexed && (m->flags & ROC_F_PROMPT) == 0) {
+#if ROC_APP_SCREENS
+            if (m->indexed && (m->flags & ROC_F_PROMPT) == 0 && roc_layer_spec.home != NULL) {
                 term_puts(&m->t, "logout\r\n");
-                screen_enter(m, "main");
+                screen_enter(m, roc_layer_spec.home);
                 return;
             }
 #endif

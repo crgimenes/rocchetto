@@ -46,8 +46,8 @@ export async function boot({ site = {}, index = INDEX, home = null, storage = nu
     host_request(id, ptr, len) {
       t.requests.push({ id, path: text(ptr, len) });
     },
-    host_live_open() {},
-    host_live_close() {},
+    host_stream_open() {},
+    host_stream_close() {},
     host_term_resize() {},
     host_pick_file() {},
     host_store_put(ptr, len) {

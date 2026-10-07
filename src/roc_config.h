@@ -25,19 +25,10 @@
    ROC_APP_SCREENS is the machinery: Filo programs that paint, the apps of
    /bin (edt, Core War's picker) among them.
 
-   Three are a layer's, not this repository's: a build that adds one (a BBS
-   over rocchetto) turns them on and brings their sources and headers (the
-   Makefile's APP_BOARD, APP_LIVE, APP_DOORS and EXTRA_INC). Off, the shell
-   has none of it and needs none of it.
-   - ROC_APP_BOARD: a front screen named "main" the shell boots to and goes
-     back to (menu, exit, Ctrl-D), the `articles` command over /pub, and the
-     effects between screens (fx-next): splash.h's splash_state,
-     splash_enter, splash_has_effect and splash_transition.
-   - ROC_APP_LIVE: watching another terminal over a host's socket (the
-     host's live_open, live_close and term_resize; roc_live_data and
-     roc_live_event back): live.h's live state, live_begin and the cmd.
-   - ROC_APP_DOORS: full-screen C apps opened by name from a screen
-     (exec "fire"): door_fire.h's fire_state and fire_enter.
+   A layer over the shell (a BBS) is not a switch here: it is a file, the
+   one with roc_layer_spec (src/roc.h) — its front screen, its doors, its
+   commands, its effects — named in the Makefile's EXTEND_SRC and
+   LAYER_SRC. The shell alone links host/extend_none.c, which has none.
 
    The Makefile keeps these and the source list in step: set them there
    (APPS_COREWAR=0 and so on), not with -D alone, or the files would still
@@ -46,37 +37,22 @@
 #ifndef ROC_APP_SCREENS
 #define ROC_APP_SCREENS 1 /* Filo programs that paint: the screens and the apps of /bin */
 #endif
-#ifndef ROC_APP_BOARD
-#define ROC_APP_BOARD 0 /* a layer's: front screen, menu, articles, effects */
-#endif
 #ifndef ROC_APP_EDIT
 #define ROC_APP_EDIT 1 /* the full-screen editor (edit, edt): 27 KB with a small text buffer */
 #endif
 #ifndef ROC_APP_COREWAR
 #define ROC_APP_COREWAR 1 /* the arena, the assembler, the mars command: 255 KB of statics */
 #endif
-#ifndef ROC_APP_LIVE
-#define ROC_APP_LIVE 0 /* a layer's: watching another terminal over a socket */
-#endif
-#ifndef ROC_APP_DOORS
-#define ROC_APP_DOORS 0 /* a layer's: full-screen apps in C */
-#endif
 #ifndef ROC_APP_TOOLS
 #define ROC_APP_TOOLS 1 /* filo build, dump, decompile...: 9 MB of statics */
 #endif
 
 /* What needs what, said here rather than left to the linker. */
-#if ROC_APP_BOARD && !ROC_APP_SCREENS
-#error "ROC_APP_BOARD needs ROC_APP_SCREENS: the board is screens"
-#endif
 #if ROC_APP_EDIT && !ROC_APP_SCREENS
 #error "ROC_APP_EDIT needs ROC_APP_SCREENS: the editor's face is a screen"
 #endif
 #if ROC_APP_COREWAR && !ROC_APP_SCREENS
 #error "ROC_APP_COREWAR needs ROC_APP_SCREENS: the arena picks its warriors on a screen"
-#endif
-#if ROC_APP_DOORS && !ROC_APP_BOARD
-#error "ROC_APP_DOORS needs ROC_APP_BOARD: a door is opened from the layer's screens"
 #endif
 
 /* ---- how big the build is ---- */
@@ -131,13 +107,6 @@
 #endif
 #ifndef ROC_CFG_SCR_MEM_RUN
 #define ROC_CFG_SCR_MEM_RUN (256 * 1024)
-#endif
-
-/* The live stream's frame, which compterm fixes at its own buffer size.
-   Lowering it below what the watched terminal sends breaks the stream, so
-   a build without live coding drops the app instead. 256 KB. */
-#ifndef ROC_CFG_LIVE_PAYLOAD_CAP
-#define ROC_CFG_LIVE_PAYLOAD_CAP (256 * 1024)
 #endif
 
 /* Regular expressions a script may hold compiled at once (re-compile):

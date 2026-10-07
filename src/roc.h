@@ -28,20 +28,11 @@
 #if ROC_APP_SCREENS
 #include "screen.h"
 #endif
-#if ROC_APP_BOARD
-#include "splash.h"
-#endif
 #if ROC_APP_EDIT
 #include "edit.h"
 #endif
 #if ROC_APP_COREWAR
 #include "corewar.h"
-#endif
-#if ROC_APP_LIVE
-#include "live.h"
-#endif
-#if ROC_APP_DOORS
-#include "door_fire.h"
 #endif
 
 enum {
@@ -115,9 +106,10 @@ typedef struct {
 enum { ROC_STORE_OTHER = 2 };
 
 /* roc_init flags */
-#define ROC_F_NO_SPLASH 0x1U /* boot straight into the menu (reduced motion) */
+#define ROC_F_NO_SPLASH                                                                            \
+    0x1U /* boot straight into the layer's home, no boot show (reduced motion) */
 /* a terminal app's shell (fosforo): the prompt from the start, quiet (the
-   app has its own greeting), no board, and exit ends the session */
+   app has its own greeting), no layer's home, and exit ends the session */
 #define ROC_F_PROMPT 0x2U
 
 /* fh_open's size of a file that arrives as it is read (the site's, in the
@@ -146,13 +138,15 @@ typedef void (*roc_dir_each)(void *user, const char *name, bool dir, bool link);
 
 /* Host contract: callbacks are called by the core; the host MUST NOT call
    back into the core from inside them — defer and answer with roc_feed*/
-/* roc_live_data/event later. live_* and term_resize are optional (NULL =
-   the capability does not exist on this host). */
+/* roc_stream_data/event later. stream_* and term_resize are optional (NULL
+   = the capability does not exist on this host). */
 typedef struct {
     void *ctx;
     void (*request)(void *ctx, uint32_t req_id, const char *path);
-    void (*live_open)(void *ctx);
-    void (*live_close)(void *ctx);
+    /* a byte stream the host connects to, for the layer (roc_layer): its
+       bytes and events come back through roc_stream_data and _event */
+    void (*stream_open)(void *ctx);
+    void (*stream_close)(void *ctx);
     /* pin the terminal grid to cols x rows; (0, 0) unpins (back to fit) */
     void (*term_resize)(void *ctx, uint16_t cols, uint16_t rows);
     /* ask the person for files to put in dest, a directory of theirs; they
@@ -291,6 +285,33 @@ typedef enum {
 } roc_req_kind;
 
 typedef struct roc roc;
+
+/* What a layer over the shell brings (a BBS: its front screen, its doors,
+   its commands), linked in the file that has roc_host_extend (EXTEND_SRC):
+   the shell alone links host/extend_none.c, which brings nothing. Any
+   field may be NULL. */
+typedef struct {
+    /* the screen the session opens on and goes back to: menu, exit and
+       Ctrl-D go there instead of ending it. NULL: the prompt is the session */
+    const char *home;
+    /* the first thing shown, which ends on home (a splash); NULL: home */
+    void (*boot)(roc *m);
+    /* (exec NAME) for a NAME of the layer's: true when it took the screen */
+    bool (*exec)(roc *m, const char *name, const char *arg);
+    /* the layer's commands, NULL-ended, and what runs one: true when it
+       was one of them */
+    const char *const *commands;
+    bool (*command)(roc *m, int argc, char *const argv[]);
+    /* (fx-next NAME...): whether NAME is an effect, and the effects played
+       from what the terminal shows to the screen just loaded unsent */
+    bool (*effect)(const char *name);
+    void (*transition)(roc *m, const char *const names[], size_t n);
+    /* what came on the host's stream (stream_open) */
+    void (*stream_data)(roc *m, const uint8_t *data, size_t n);
+    void (*stream_event)(roc *m, uint32_t event);
+} roc_layer;
+
+extern const roc_layer roc_layer_spec;
 
 typedef enum {
     RD_START,   /* checking for BOM / front matter fence */
@@ -437,19 +458,10 @@ typedef struct roc {
     char fm_fence[4]; /* "+++" or "---" while skipping front matter */
 
     pager pg;
-#if ROC_APP_LIVE
-    live lv;
-#endif
-#if ROC_APP_DOORS
-    fire_state fire;
-#endif
     md md;
     compositor cmp;
     script_state sc;
     ed_state ed_l; /* the line editor: no screen, so no board needed */
-#if ROC_APP_BOARD
-    splash_state spl;
-#endif
 #if ROC_APP_SCREENS
     screen_state scr;
 #endif
@@ -552,6 +564,10 @@ bool roc_list_waiting(const roc *m);
 /* Answers to a request() call. Feeds larger than ROC_FEED_MAX are refused. */
 void roc_feed(roc *m, uint32_t req_id, const uint8_t *data, size_t n);
 void roc_feed_eof(roc *m, uint32_t req_id);
+/* What came on the stream the layer asked the host to open, in any
+   chunks: handed to the layer, dropped when it has no use for it. */
+void roc_stream_data(roc *m, const uint8_t *data, size_t n);
+void roc_stream_event(roc *m, uint32_t event);
 void roc_feed_fail(roc *m, uint32_t req_id);
 
 bool roc_exited(const roc *m);

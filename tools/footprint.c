@@ -28,9 +28,6 @@ int main(int argc, char **argv) {
         {"script (user's Filo)", sizeof(script_state)},
         {"pager (article being read)", sizeof(pager)},
         {"vfs (site index)", sizeof(vfs)},
-#if ROC_APP_LIVE
-        {"live (compterm frame)", sizeof(live)},
-#endif
 #if ROC_APP_SCREENS
         {"screen (screens' Filo)", sizeof(screen_state)},
 #endif
@@ -40,9 +37,6 @@ int main(int argc, char **argv) {
         {"compositor", sizeof(compositor)},
         {"term (output)", sizeof(term)},
         {"capture (redirect)", sizeof(roc_capture)},
-#if ROC_APP_DOORS
-        {"doors (fire)", sizeof(fire_state)},
-#endif
         {"home blob", HOME_BLOB_CAP},
         {"history", (size_t)ROC_HIST_MAX * ROC_LINE_MAX},
     };
@@ -70,8 +64,8 @@ int main(int argc, char **argv) {
     }
 
     printf("terminal ceiling  %dx%d\n", TERM_COLS_MAX, TERM_ROWS_MAX);
-    printf("apps              screens %d, board %d, corewar %d, live %d, doors %d\n\n",
-           ROC_APP_SCREENS, ROC_APP_BOARD, ROC_APP_COREWAR, ROC_APP_LIVE, ROC_APP_DOORS);
+    printf("apps              screens %d, edit %d, corewar %d, tools %d\n\n", ROC_APP_SCREENS,
+           ROC_APP_EDIT, ROC_APP_COREWAR, ROC_APP_TOOLS);
     printf("the session (one visitor's roc):\n");
     size_t named = 0;
     i = 0;

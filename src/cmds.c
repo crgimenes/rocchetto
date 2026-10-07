@@ -16,29 +16,30 @@
    in /bin, which Tab finds by itself; what each one does is in
    bin/roc_help.md. Aliases (more, ?, logout, edit) stay in the dispatcher. */
 static const char *const commands[] = {
-#if ROC_APP_BOARD
-    "articles",
-#endif
-    "cd",       "cat",     "less",
+    "cd",     "cat",     "less",
 #if ROC_APP_COREWAR
-    "mars",     "corewar",
-#endif
-#if ROC_APP_LIVE
-    "live",
+    "mars",   "corewar",
 #endif
 #if ROC_APP_TOOLS
     "diff",
 #endif
-    "menu",     "echo",    "filo",  "exit", "set",  "unset", "test",    "true",   "false",
-    "printf",   "read",    "sleep", "type", "wait", "alias", "unalias", "pbcopy", "pbpaste",
+    "menu",   "echo",    "filo",  "exit", "set",  "unset", "test",    "true",   "false",
+    "printf", "read",    "sleep", "type", "wait", "alias", "unalias", "pbcopy", "pbpaste",
 };
 
+enum { NCOMMANDS = sizeof(commands) / sizeof(commands[0]) };
+
+/* the layer's after the shell's own */
 size_t roc_command_count(void) {
-    return sizeof(commands) / sizeof(commands[0]);
+    size_t n = NCOMMANDS;
+    for (const char *const *c = roc_layer_spec.commands; c != NULL && *c != NULL; c++) {
+        n++;
+    }
+    return n;
 }
 
 const char *roc_command_name(size_t i) {
-    return commands[i];
+    return i < NCOMMANDS ? commands[i] : roc_layer_spec.commands[i - NCOMMANDS];
 }
 
 bool roc_home_path(const roc *m, const char *file, char *out, size_t cap) {
@@ -891,93 +892,22 @@ static bool in_tree(const char *path, size_t *len) {
     return true;
 }
 
-#if ROC_APP_BOARD
-/* articles [N]: the site's articles, all of /pub as the shell's Articles
-   screen lists them (the index's order, newest first): number, date and
-   title, one a row; N opens that one in the pager, as "Read #" does. */
-static void articles(roc *m, const sh_line *sl) {
-    long want = 0;
-    if (sl->argc == 2) {
-        const char *d = sl->argv[1];
-        for (; *d >= '0' && *d <= '9' && want < 100000; d++) {
-            want = (want * 10) + (*d - '0');
-        }
-        if (*d != '\0' || want < 1) {
-            want = -1;
-        }
-    }
-    if (sl->argc > 2 || want < 0) {
-        roc_err(m, "articles", "", "usage: articles [number]");
-        m->status = 2;
-        return;
-    }
-    if (!m->indexed) {
-        roc_err(m, "articles", "", "no index");
-        m->status = 1;
-        return;
-    }
-    size_t cols = roc_out_terminal(m) ? (size_t)m->t.cols : SIZE_MAX;
-    long k = 0;
-    for (size_t i = 0; i < m->fs.nnodes; i++) {
-        const vfs_node *n = &m->fs.nodes[i];
-        if (n->dir || !vfs_is_child(n, "/pub")) {
-            continue;
-        }
-        k++;
-        if (want > 0) {
-            if (k == want) {
-                roc_reader_begin_less(m, n->path);
-                return;
-            }
-            continue;
-        }
-        const char *base = strrchr(n->path, '/');
-        const char *label = n->title[0] != '\0' ? n->title : base + 1;
-        char row[VFS_PATH_MAX + 64];
-        int w = snprintf(row, sizeof(row), "%3ld  %-10.10s  ", k, n->date);
-        size_t at = w > 0 ? (size_t)w : 0;
-        size_t width = at;
-        /* the title, cut where the terminal ends: a wrapped row breaks the column */
-        for (const char *c = label; *c != '\0' && at + 4 < sizeof(row);) {
-            uint32_t cp = 0;
-            int resync = 0;
-            utf8_dec d;
-            utf8_dec_init(&d);
-            size_t len = 0;
-            utf8_result r = UTF8_MORE;
-            while (r == UTF8_MORE && c[len] != '\0') {
-                r = utf8_dec_feed(&d, (uint8_t)c[len], &cp, &resync);
-                len++;
-            }
-            size_t cw = 1;
-            if (r == UTF8_RUNE) {
-                cw = (size_t)utf8_width(cp);
-            } else if (r == UTF8_ERROR && resync != 0 && len > 1) {
-                len--; /* that byte starts the next one */
-            }
-            if (cols != SIZE_MAX && width + cw >= cols) {
-                break;
-            }
-            memcpy(row + at, c, len);
-            at += len;
-            width += cw;
-            c += len;
-        }
-        row[at++] = '\n';
-        roc_out(m, (const uint8_t *)row, at);
-    }
-    if (want > 0) {
-        roc_err(m, "articles", sl->argv[1], "no such article");
-        m->status = 1;
-    }
+/* An app's shell (ROC_F_PROMPT, the fosforo app) is the shell alone: no
+   layer under it, so none of its commands and no front screen. */
+static const roc_layer no_layer = {0};
+
+static const roc_layer *layer_of(const roc *m) {
+    return (m->flags & ROC_F_PROMPT) != 0 ? &no_layer : &roc_layer_spec;
 }
 
-#endif
-
 bool roc_command_here(const roc *m, const char *name) {
-    /* an app's shell (the fosforo app) has no site, so none of its articles */
-    if ((m->flags & ROC_F_PROMPT) != 0) {
-        return strcmp(name, "articles") != 0;
+    if (strcmp(name, "menu") == 0) {
+        return layer_of(m)->home != NULL; /* menu goes to the layer's front screen */
+    }
+    for (size_t i = NCOMMANDS; i < roc_command_count(); i++) {
+        if (strcmp(name, roc_command_name(i)) == 0) {
+            return layer_of(m) == &roc_layer_spec;
+        }
     }
     return true;
 }
@@ -3379,10 +3309,8 @@ static void run_named(roc *m, const sh_line *sl, char *rest) {
         script_run_path(m, first, rest);
     } else if (strchr(cmd, '/') != NULL) {
         script_exec_path(m, cmd, rest); /* ./name, /bin/name: a program by its bytes */
-#if ROC_APP_BOARD
-    } else if (strcmp(cmd, "articles") == 0 && roc_command_here(m, cmd)) {
-        articles(m, sl);
-#endif
+    } else if (layer_of(m)->command != NULL && layer_of(m)->command(m, sl->argc, sl->argv)) {
+        /* one of the layer's commands, run */
     } else if (strcmp(cmd, "cd") == 0 || strcmp(cmd, "cat") == 0 || strcmp(cmd, "less") == 0 ||
                strcmp(cmd, "more") == 0 || strcmp(cmd, "ed") == 0) {
         if (sl->argc > 2 && strcmp(cmd, "cat") == 0) {
@@ -3441,13 +3369,9 @@ static void run_named(roc *m, const sh_line *sl, char *rest) {
     } else if (strcmp(cmd, "corewar") == 0) {
         roc_cmd_corewar(m, rest);
 #endif
-#if ROC_APP_LIVE
-    } else if (strcmp(cmd, "live") == 0) {
-        live_begin(m);
-#endif
-#if ROC_APP_BOARD
-    } else if (strcmp(cmd, "menu") == 0) {
-        screen_enter(m, "main");
+#if ROC_APP_SCREENS
+    } else if (strcmp(cmd, "menu") == 0 && layer_of(m)->home != NULL) {
+        screen_enter(m, layer_of(m)->home);
 #endif
     } else if (strcmp(cmd, "test") == 0 || strcmp(cmd, "[") == 0) {
         test_cmd(m, sl);
@@ -3489,10 +3413,10 @@ static void run_named(roc *m, const sh_line *sl, char *rest) {
     } else if (strcmp(cmd, "exit") == 0 || strcmp(cmd, "logout") == 0) {
         m->list.active = false; /* the rest of the list goes with the shell */
                                 /* the shell "spawned" this shell; exit returns to it. Logoff for
-                                   real is the menu's X. Without an index there is no board. */
-#if ROC_APP_BOARD
-        if (m->indexed && (m->flags & ROC_F_PROMPT) == 0) {
-            screen_enter(m, "main");
+                                   real is the menu's X. Without an index there is no front screen. */
+#if ROC_APP_SCREENS
+        if (m->indexed && layer_of(m)->home != NULL) {
+            screen_enter(m, layer_of(m)->home);
             return;
         }
 #endif

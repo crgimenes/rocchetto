@@ -46,40 +46,31 @@ APPS_SCREENS ?= 1
 APPS_EDIT ?= 1
 APPS_COREWAR ?= 1
 APPS_TOOLS ?= 1
-# The layer's apps, whose sources are the layer's (APP_BOARD, APP_LIVE,
-# APP_DOORS): off unless a build that has them turns them on.
-APPS_BOARD ?= 0
-APPS_LIVE ?= 0
-APPS_DOORS ?= 0
-APPFLAGS = -DROC_APP_SCREENS=$(APPS_SCREENS) -DROC_APP_BOARD=$(APPS_BOARD) -DROC_APP_EDIT=$(APPS_EDIT) -DROC_APP_COREWAR=$(APPS_COREWAR) \
-	-DROC_APP_LIVE=$(APPS_LIVE) -DROC_APP_DOORS=$(APPS_DOORS) -DROC_APP_TOOLS=$(APPS_TOOLS) \
-	-DFBC_HOST_NUMBERS
+APPFLAGS = -DROC_APP_SCREENS=$(APPS_SCREENS) -DROC_APP_EDIT=$(APPS_EDIT) -DROC_APP_COREWAR=$(APPS_COREWAR) \
+	-DROC_APP_TOOLS=$(APPS_TOOLS) -DFBC_HOST_NUMBERS
 APP_SCREENS = $(ROC)/src/screen.c $(TERM_SRC)/paint.c $(TERM_SRC)/field.c
-APP_BOARD ?=
 APP_EDIT = $(ROC)/src/edit.c $(TERM_SRC)/tbx.c
 APP_COREWAR = $(ROC)/src/corewar.c $(CW_SRC)/mars.c $(CW_SRC)/arena.c
-APP_LIVE ?=
-APP_DOORS ?=
 # filo's tools, clang_filo's listing and decompiler: their numbers are the
 # runtime's (FBC_HOST_NUMBERS), since the shell has no C library
 APP_TOOLS = $(addprefix $(ROC)/src/,filotools.c debug.c diff.c) $(FILO)/fbc_dump.c $(FILO)/fbc_decompile.c
 # the formatter, which the tools and the editor (tb-format) both take
 APP_FMT = $(FILO)/filo_fmt.c
 APPSRC = $(if $(filter 1,$(APPS_SCREENS)),$(APP_SCREENS)) \
-	$(if $(filter 1,$(APPS_BOARD)),$(APP_BOARD)) \
 	$(if $(filter 1,$(APPS_EDIT)),$(APP_EDIT)) \
 	$(if $(filter 1,$(APPS_COREWAR)),$(APP_COREWAR)) \
-	$(if $(filter 1,$(APPS_LIVE)),$(APP_LIVE)) \
-	$(if $(filter 1,$(APPS_DOORS)),$(APP_DOORS)) \
 	$(if $(filter 1,$(APPS_TOOLS)),$(APP_TOOLS)) \
 	$(if $(filter 1,$(APPS_EDIT) $(APPS_TOOLS)),$(APP_FMT))
 
-# The host's own builtins past rocchetto's (filo_extend): none here; a
-# layer names its own file.
+# The host's own builtins past rocchetto's (filo_extend) and the layer over
+# the shell (roc_layer_spec, src/roc.h): none here; a layer names its own
+# file, and in LAYER_SRC the rest of its sources. A layer is screens: the
+# builds without them (small, esp32) take none.
 EXTEND_SRC ?= $(ROC)/host/extend_none.c
+LAYER_SRC ?=
 BASE = $(EXTEND_SRC) $(addprefix $(ROC)/src/,roc.c cmds.c script.c script_data.c fsmeta.c fileh.c sh.c tree.c vfs.c ufs.c home.c ed.c printf.c regex.c) \
 	$(addprefix $(TERM_SRC)/,keyin.c canvas.c md.c hl.c pager.c term.c utf8.c tbuf.c)
-CORE = $(BASE) $(APPSRC)
+CORE = $(BASE) $(APPSRC) $(LAYER_SRC)
 HDRS = build/version.h $(FILO)/filo.h $(wildcard $(ROC)/src/*.h) $(CW_SRC)/mars.h $(CW_SRC)/arena.h \
 	$(FILO)/fbc_dump.h $(FILO)/fbc_decompile.h $(FILO)/filo_fmt.h $(wildcard $(TERM_SRC)/*.h) \
 	$(EXTRA_HDRS)
@@ -112,10 +103,8 @@ $(GEN_SRC): $(SCREENS) $(COMMANDS) $(ROC)/tools/embed.sh
 
 # The units are compiled with every app this build can have, so any build
 # can carry them: one without an app refuses that app's screens at load.
-ALLAPPS = -DROC_APP_SCREENS=1 -DROC_APP_BOARD=$(APPS_BOARD) -DROC_APP_EDIT=1 -DROC_APP_COREWAR=1 \
-	-DROC_APP_LIVE=$(APPS_LIVE) -DROC_APP_DOORS=$(APPS_DOORS) -DROC_APP_TOOLS=1 -DFBC_HOST_NUMBERS
-ALLSRC = $(BASE) $(APP_SCREENS) $(if $(filter 1,$(APPS_BOARD)),$(APP_BOARD)) $(APP_EDIT) $(APP_COREWAR) \
-	$(if $(filter 1,$(APPS_LIVE)),$(APP_LIVE)) $(if $(filter 1,$(APPS_DOORS)),$(APP_DOORS)) $(APP_TOOLS) $(APP_FMT) $(FILOSRC)
+ALLAPPS = -DROC_APP_SCREENS=1 -DROC_APP_EDIT=1 -DROC_APP_COREWAR=1 -DROC_APP_TOOLS=1 -DFBC_HOST_NUMBERS
+ALLSRC = $(BASE) $(APP_SCREENS) $(APP_EDIT) $(APP_COREWAR) $(LAYER_SRC) $(APP_TOOLS) $(APP_FMT) $(FILOSRC)
 build/mkunits: $(ALLSRC) $(GEN_SRC) $(HDRS) $(ROC)/tools/mkunits.c
 	$(CC) -std=c23 -O2 $(WARN) $(ALLAPPS) $(INC) -o $@ $(ALLSRC) $(GEN_SRC) $(ROC)/tools/mkunits.c
 
@@ -350,11 +339,10 @@ SMALL = -DFT_CFG_COLS_MAX=100 -DFT_CFG_ROWS_MAX=40 \
 	-DROC_CFG_SC_REGEX=2
 
 small: APPS_SCREENS = 0
-small: APPS_BOARD = 0
+small: EXTEND_SRC = $(ROC)/host/extend_none.c
+small: LAYER_SRC =
 small: APPS_EDIT = 0
 small: APPS_COREWAR = 0
-small: APPS_LIVE = 0
-small: APPS_DOORS = 0
 small: APPS_TOOLS = 0
 small: $(CORE) $(FILOSRC) $(GEN) $(HDRS) $(ROC)/tools/footprint.c $(ROC)/host/posix/main.c
 	@mkdir -p build
@@ -425,11 +413,10 @@ ESP32_CFG = -DFT_CFG_COLS_MAX=20 -DFT_CFG_ROWS_MAX=8 -DFT_CFG_OUT_CAP=4096 \
 .PHONY: esp32-src esp32 esp32-flash
 
 esp32-src: APPS_SCREENS = 0
-esp32-src: APPS_BOARD = 0
+esp32-src: EXTEND_SRC = $(ROC)/host/extend_none.c
+esp32-src: LAYER_SRC =
 esp32-src: APPS_EDIT = 0
 esp32-src: APPS_COREWAR = 0
-esp32-src: APPS_LIVE = 0
-esp32-src: APPS_DOORS = 0
 esp32-src: APPS_TOOLS = 0
 esp32-src:
 	@rm -rf $(ESP32_DIR)/src
@@ -444,11 +431,10 @@ esp32-src:
 	@printf 'esp32: %s translation units\n' "$$(ls $(ESP32_DIR)/src | wc -l | tr -d ' ')"
 
 esp32: APPS_SCREENS = 0
-esp32: APPS_BOARD = 0
+esp32: EXTEND_SRC = $(ROC)/host/extend_none.c
+esp32: LAYER_SRC =
 esp32: APPS_EDIT = 0
 esp32: APPS_COREWAR = 0
-esp32: APPS_LIVE = 0
-esp32: APPS_DOORS = 0
 esp32: APPS_TOOLS = 0
 esp32: esp32-src
 	arduino-cli compile -b $(ESP32_FQBN) $(ESP32_DIR) \
