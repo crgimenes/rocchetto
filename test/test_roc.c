@@ -1142,6 +1142,507 @@ static void test_home_carry(void) {
     CHECK(strstr(o, "keeps nothing between visits") != NULL);
 }
 
+static void test_home_kept(void) {
+    mock_host h;
+    kept_len = 0;
+    kept_fail = 0;
+    roc *m = boot_kept(&h);
+    send(m, "s\r");
+    drain(m);
+
+    /* every change saves the whole home: files under it, relative paths */
+    send(m, "mkdir ~/w\r");
+    drain(m);
+    static const char w[] = "(write-file \"~/w/imp.red\" \"MOV 0, 1\\n\")";
+    static const tree_file tree[] = {{"bin/w.filo", (const uint8_t *)w, sizeof(w) - 1}};
+    tree_programs(m, tree, 1);
+    send(m, "w\r");
+    drain(m);
+    tree_set_source(NULL, 0);
+    CHECK(kept_len > 0);
+    CHECK(memcmp(kept, "msh-home 2\nd\tw\nf\tw/imp.red\t9\t-\nMOV 0, 1\n\n", 39) == 0);
+    send(m, "cd ~\r");
+    drain(m);
+    drop(m, "hi.filo", "", "(echo \"hi\")");
+    drain(m);
+    CHECK(strstr((const char *)kept, "f\thi.filo\t11\t-\n") != NULL);
+
+    /* too big for the blob: kept in the session, said once, not in the blob */
+    static uint8_t big[HOME_FILE_MAX + 1];
+    memset(big, 'b', sizeof(big));
+    CHECK(roc_upload_begin(m, "big.txt", "", sizeof(big)));
+    roc_upload_data(m, big, sizeof(big));
+    roc_upload_end(m);
+    const char *o = drain(m);
+    CHECK(strstr(o, "uploaded /home/guest/big.txt") != NULL);
+    CHECK(strstr(o, "rocchetto: home: big.txt: File too large; not kept between visits") != NULL);
+    CHECK(strstr((const char *)kept, "big.txt") == NULL);
+    CHECK(strstr((const char *)kept, "hi.filo") != NULL); /* the ones after still go */
+
+    /* the host that cannot keep says so */
+    kept_fail = 1;
+    send(m, "rm big.txt\r");
+    o = drain(m);
+    CHECK(strstr(o, "rocchetto: home: No space left on device; not kept") != NULL);
+    kept_fail = 0;
+    send(m, "rm hi.filo\r");
+    drain(m);
+    CHECK(strstr((const char *)kept, "hi.filo") == NULL);
+
+    /* a new visit: the home comes back from the blob, empty dirs too */
+    size_t saved = kept_len;
+    send(m, "mkdir ~/empty\r");
+    drain(m);
+    m = boot_kept(&h);
+    o = drain(m);
+    CHECK(strstr(o, "1 file back in /home/guest.") != NULL);
+    send(m, "s\r");
+    drain(m);
+    send(m, "cat ~/w/imp.red\r");
+    o = drain(m);
+    CHECK(strstr(o, "MOV 0, 1") != NULL);
+    CHECK(vfs_lookup(&m->fs, "/home/guest/empty") != NULL);
+    CHECK(vfs_lookup(&m->fs, "/home/guest/empty")->dir);
+    CHECK(vfs_lookup(&m->fs, "/home/guest/w")->dir);
+    CHECK(saved > 0);
+
+    /* nothing kept: a first visit, silent */
+    kept_len = 0;
+    m = boot_kept(&h);
+    o = drain(m);
+    CHECK(strstr(o, "back in") == NULL);
+    /* a host without store never asks */
+    m = boot_menu(&h);
+    CHECK(h.pending == 0);
+}
+
+/* The small commands that need no file: each one answers from what the
+   shell already holds, and all of them come with help and Tab for free. */
+static void test_small_commands(void) {
+    mock_host h;
+    roc *m = boot(&h);
+    drain(m);
+    send(m, "ver\r");
+    const char *o = drain(m);
+    CHECK(strstr(o, "rocchetto " ROC_VERSION "\r\n") != NULL);
+    send(m, "whoami\r");
+    o = drain(m);
+    CHECK(strstr(o, "\r\nguest\r\n") != NULL);
+    send(m, "hostname\r");
+    o = drain(m);
+    CHECK(strstr(o, "\r\nshell.test\r\n") != NULL);
+    send(m, "echo  hello   there \r"); /* the words, one space apart, as sh's */
+    o = drain(m);
+    CHECK(strstr(o, "\r\nhello there\r\n") != NULL);
+    /* history is a script reading the session's lines as a file */
+    send(m, "history\r");
+    o = drain(m);
+    CHECK(strstr(o, "\r\nver\r\nwhoami\r\nhostname\r\necho  hello   there\r\nhistory\r\n") != NULL);
+    send(m, "hist\t\r"); /* Tab knows them; the repeat is one memory, not two */
+    o = drain(m);
+    CHECK(strstr(o, "there\r\nhistory\r\n") != NULL);
+    CHECK(strstr(o, "history\r\nhistory") == NULL);
+    /* dot files are hidden unless asked; -a also shows . and .. */
+    send(m, "ls /home/guest\r");
+    o = drain(m);
+    CHECK(strstr(o, ".history") == NULL);
+    send(m, "ls -a /home/guest\r");
+    o = drain(m);
+    CHECK(strstr(o, ".history") != NULL);
+    CHECK(strstr(o, "\r\n.") != NULL && strstr(o, "..") != NULL);
+    send(m, "tree /home\r");
+    o = drain(m);
+    CHECK(strstr(o, "guest/") != NULL && strstr(o, ".history") == NULL);
+    send(m, "tree -a /home\r");
+    o = drain(m);
+    CHECK(strstr(o, "└── .history") != NULL);
+    send(m, "cat /home/guest/.h\t"); /* Tab finds it once the dot is typed */
+    drain(m);
+    CHECK(line_is(m, "cat /home/guest/.history "));
+    send(m, "\x15");
+    drain(m);
+    send(m, "cat /home/guest/.history\r");
+    o = drain(m);
+    CHECK(strstr(o, "\r\nver\r\n") != NULL);
+    send(m, "clear\r");
+    o = drain(m);
+    CHECK(strstr(o, "\x1b[H\x1b[2J") != NULL);
+
+    /* tree is a recursive Filo script over dir-entries */
+    send(m, "tree /lib\r");
+    o = drain(m);
+    CHECK(strstr(o, "\r\n/lib\r\n└── roc/\r\n    ├── ") != NULL);
+    CHECK(strstr(o, "    │   ├── ") != NULL || strstr(o, "    │   └── ") != NULL);
+    CHECK(strstr(o, "    └── ") != NULL);
+    send(m, "cd /bin\r");
+    drain(m);
+    send(m, "tree\r"); /* no argument: here */
+    o = drain(m);
+    CHECK(strstr(o, "\r\n/bin\r\n├── at\r\n├── ") != NULL);
+    CHECK(strstr(o, "└── xargs\r\n") != NULL);
+    send(m, "tree /nope\r");
+    o = drain(m);
+    CHECK(strstr(o, "rocchetto: tree: ") != NULL);
+    send(m, "cd /\r");
+    drain(m);
+    send(m, "pwd\r");
+    o = drain(m);
+    CHECK(strstr(o, "\r\n/\r\n") != NULL);
+}
+
+/* A command the dispatcher does not know is a Filo program in the shell's
+   tree, run with ARGS; help is the first one. The shell's own files are
+   readable from it, through the same pipeline a fetched file uses. */
+static void test_scripts(void) {
+    mock_host h;
+    roc *m = boot(&h);
+    drain(m);
+
+    /* help is bin/help.filo showing bin/roc_help.md, rendered as markdown */
+    send(m, "help\r");
+    const char *o = drain(m);
+    CHECK(strstr(o, "\x1b[0;1;36;4mrocchetto") != NULL); /* headings and code came out styled */
+    CHECK(help_shown(m, o));
+    CHECK(m->mode == ROC_MODE_LINE); /* and the prompt is back */
+    send(m, "help | grep -c 'Not here'; help > ~/h.txt; wc -l < ~/h.txt\r"); /* whole, not paged */
+    o = drain(m);
+    CHECK(m->t.napps == 0 && strstr(o, "\r\n1\r\n") != NULL);
+
+    /* the shell's own files are in the tree it walks */
+    send(m, "ls /bin\r");
+    o = drain(m);
+    CHECK(strstr(o, "help") != NULL && strstr(o, "edt") != NULL);
+    CHECK(strstr(o, ".filo") == NULL && strstr(o, ".fbb") == NULL); /* programs, by their names */
+    CHECK(strstr(o, "roc_help.md") != NULL);
+    send(m, "cat /bin/roc_help.md\r");
+    o = drain(m);
+    CHECK(strstr(o, "edt [file]") != NULL);
+    send(m, "less /bin/filo_api.md\r");
+    drain(m);
+    CHECK(m->t.napps == 1);
+    send(m, "q");
+    drain(m);
+    CHECK(m->t.napps == 0);
+    send(m, "cd /lib/roc\r");
+    drain(m);
+    send(m, "ls -F\r");
+    o = drain(m);
+    CHECK(strstr(o, "warriors/") != NULL);
+    send(m, "cd /\r");
+    drain(m);
+
+    /* a tree of the test's own: a script with arguments, and one that fails */
+    static const char hi[] = "(echo \"hi\" (nth ARGS 0) \"from\" VERSION)";
+    static const char sum[] = "(write (+ 1 1) \" and \" (list 1 2) (= 1 1))";
+    static const char bad[] = "(nth ARGS 9)";
+    /* programs, as filo build makes them: a source in /bin is no command */
+    static uint8_t hi_bc[4096];
+    static uint8_t bad_bc[4096];
+    static uint8_t sum_bc[4096];
+    size_t hi_len = 0;
+    size_t bad_len = 0;
+    size_t sum_len = 0;
+    CHECK(script_build(m, (const uint8_t *)hi, sizeof(hi) - 1, hi_bc, sizeof(hi_bc), &hi_len));
+    CHECK(script_build(m, (const uint8_t *)bad, sizeof(bad) - 1, bad_bc, sizeof(bad_bc), &bad_len));
+    CHECK(script_build(m, (const uint8_t *)sum, sizeof(sum) - 1, sum_bc, sizeof(sum_bc), &sum_len));
+    static tree_file tree[4];
+    tree[0] = (tree_file){"bin/hi", hi_bc, hi_len};
+    tree[1] = (tree_file){"bin/bad", bad_bc, bad_len};
+    tree[2] = (tree_file){"bin/sum", sum_bc, sum_len};
+    tree[3] = (tree_file){"bin/src.filo", (const uint8_t *)hi, sizeof(hi) - 1};
+    tree_set_source(tree, 4);
+    send(m, "sum\r");
+    o = drain(m);
+    CHECK(strstr(o, "2 and (list 1 2)") != NULL); /* write spells values as echo does */
+    send(m, "hi there friend\r");
+    o = drain(m);
+    CHECK(strstr(o, "\r\nhi there from " ROC_VERSION "\r\n") != NULL);
+    send(m, "bad\r");
+    o = drain(m);
+    CHECK(strstr(o, "rocchetto: bad: ") != NULL);
+    send(m, "nothere\r");
+    o = drain(m);
+    CHECK(strstr(o, "command not found") != NULL);
+    send(m, "src\r"); /* a source is not a command, whatever its directory */
+    o = drain(m);
+    CHECK(strstr(o, "command not found") != NULL);
+    send(m, "/bin/hi by-path\r");
+    o = drain(m);
+    CHECK(strstr(o, "\r\nhi by-path from " ROC_VERSION "\r\n") != NULL);
+    tree_set_source(NULL, 0);
+
+    /* filo <file> and ./name run a file by path: the shell's own from
+       memory, the site's after the host sends it */
+    const char *note = "(echo \"a script of the home\")";
+    CHECK(roc_write_file(m, "test", "/home/guest/hi.filo", (const uint8_t *)note, strlen(note)));
+    send(m, "filo ~/hi.filo\r");
+    o = drain(m);
+    CHECK(strstr(o, "a script of the home") != NULL);
+    send(m, "cd ~\r");
+    drain(m);
+    send(m, "./hi.filo; echo st=$?\r"); /* a source runs with filo, not by its path */
+    o = drain(m);
+    CHECK(strstr(o, "cannot execute: not a program") != NULL && strstr(o, "st=126") != NULL);
+    send(m, "./hi; echo st=$?\r"); /* nothing is guessed: no .filo is added */
+    o = drain(m);
+    CHECK(strstr(o, "No such file or directory") != NULL && strstr(o, "st=127") != NULL);
+    send(m, "cd /bin\r");
+    drain(m);
+    send(m, "filo nothere.filo\r");
+    o = drain(m);
+    CHECK(strstr(o, "rocchetto: filo: /bin/nothere.filo: No such file or directory") != NULL);
+    send(m, "cd /\r");
+    drain(m);
+
+    CHECK(vfs_add(&m->fs, "/pub/greet.filo", 40, false));
+    h.pending = 0;
+    send(m, "filo /pub/greet.filo Ada\r");
+    CHECK(h.pending == 1);
+    CHECK(strcmp(h.path, "/pub/greet.filo") == 0);
+    static const char greet[] = "(echo \"hello,\" (nth ARGS 0))";
+    roc_feed(m, h.req_id, (const uint8_t *)greet, sizeof(greet) - 1);
+    roc_feed_eof(m, h.req_id);
+    o = drain(m);
+    CHECK(strstr(o, "hello, Ada\r\n") != NULL);
+    CHECK(m->mode == ROC_MODE_LINE);
+    CHECK(strstr(o, "guest@shell.test") != NULL); /* and the prompt came back */
+
+    /* a program of the site: fetched, then a command runs from its bytes */
+    const uint8_t *fbb = NULL;
+    size_t len = 0;
+    CHECK(tree_find_file("bin/ver", &fbb, &len));
+    CHECK(vfs_add(&m->fs, "/pub/ver3.fbb", (uint32_t)len, false));
+    h.pending = 0;
+    send(m, "filo /pub/ver3.fbb\r");
+    CHECK(h.pending == 1 && strcmp(h.path, "/pub/ver3.fbb") == 0);
+    roc_feed(m, h.req_id, fbb, len);
+    roc_feed_eof(m, h.req_id);
+    o = drain(m);
+    CHECK(strstr(o, "rocchetto " ROC_VERSION) != NULL && m->mode == ROC_MODE_LINE);
+    send(m, "cd /pub\r");
+    drain(m);
+    h.pending = 0;
+    send(m, "./ver3.fbb\r");
+    CHECK(h.pending == 1 && strcmp(h.path, "/pub/ver3.fbb") == 0);
+    roc_feed(m, h.req_id, fbb, len);
+    roc_feed_eof(m, h.req_id);
+    o = drain(m);
+    CHECK(strstr(o, "rocchetto " ROC_VERSION) != NULL);
+    /* an app opens from a copy: the site's is refused, saying so */
+    CHECK(tree_find_file("bin/edt", &fbb, &len));
+    CHECK(vfs_add(&m->fs, "/pub/ed2.fbb", (uint32_t)len, false));
+    h.pending = 0;
+    send(m, "filo /pub/ed2.fbb\r");
+    CHECK(h.pending == 1);
+    roc_feed(m, h.req_id, fbb, len);
+    roc_feed_eof(m, h.req_id);
+    o = drain(m);
+    CHECK(
+        strstr(o,
+               "rocchetto: ed2: /pub/ed2.fbb: Operation not supported: an app runs from a copy, cp "
+               "it home") != NULL);
+    CHECK(m->t.napps == 0 && m->mode == ROC_MODE_LINE);
+    send(m, "cd /\r");
+    drain(m);
+}
+
+static void test_fs_commands(void) {
+    mock_host h;
+    roc *m = boot(&h);
+    drain(m);
+
+    /* vfs_add_path makes the directories on the way */
+    CHECK(vfs_add_path(&m->fs, "/home/guest/a/b/c.txt", 3, false));
+    CHECK(vfs_lookup(&m->fs, "/home/guest/a") != NULL && vfs_lookup(&m->fs, "/home/guest/a")->dir);
+    CHECK(vfs_lookup(&m->fs, "/home/guest/a/b")->dir);
+    CHECK(vfs_has_children(&m->fs, "/home/guest/a/b"));
+    CHECK(vfs_remove(&m->fs, "/home/guest/a/b/c.txt"));
+    CHECK(!vfs_has_children(&m->fs, "/home/guest/a/b"));
+    CHECK(vfs_remove(&m->fs, "/home/guest/a/b") && vfs_remove(&m->fs, "/home/guest/a"));
+
+    /* mkdir and rmdir, in the home only, with the usual words */
+    send(m, "mkdir ~/w\r");
+    drain(m);
+    CHECK(vfs_lookup(&m->fs, "/home/guest/w") != NULL);
+    send(m, "mkdir ~/w\r");
+    const char *o = drain(m);
+    CHECK(strstr(o, "rocchetto: mkdir: /home/guest/w: File exists") != NULL);
+    send(m, "mkdir /pub/x\r");
+    o = drain(m);
+    CHECK(strstr(o, "rocchetto: mkdir: /pub/x: Read-only file system") != NULL);
+    send(m, "mkdir ~/no/such\r");
+    o = drain(m);
+    CHECK(strstr(o, "rocchetto: mkdir: /home/guest/no/such: No such file or directory") != NULL);
+    send(m, "mkdir\r");
+    o = drain(m);
+    CHECK(strstr(o, "usage: mkdir [-p] dir...") != NULL);
+
+    /* write-file and read-file from a script; cp and mv over what they made */
+    static const char w[] = "(write-file \"~/w/imp.red\" \"MOV 0, 1\\n\")";
+    static const char r[] = "(write (read-file (nth ARGS 0)))";
+    static const tree_file tree[] = {
+        {"bin/w.filo", (const uint8_t *)w, sizeof(w) - 1},
+        {"bin/r.filo", (const uint8_t *)r, sizeof(r) - 1},
+    };
+    tree_programs(m, tree, 2);
+    send(m, "w\r");
+    drain(m);
+    CHECK(vfs_lookup(&m->fs, "/home/guest/w/imp.red") != NULL);
+    CHECK(vfs_lookup(&m->fs, "/home/guest/w/imp.red")->size == 9);
+    send(m, "r ~/w/imp.red\r");
+    o = drain(m);
+    CHECK(strstr(o, "MOV 0, 1\n") != NULL);
+    send(m, "r /pub/kutta.md\r");
+    o = drain(m);
+    CHECK(strstr(o, "Operation not supported") != NULL);
+    tree_set_source(NULL, 0);
+
+    send(m, "rmdir ~/w\r");
+    o = drain(m);
+    CHECK(strstr(o, "rocchetto: rmdir: /home/guest/w: Directory not empty") != NULL);
+    send(m, "cp ~/w/imp.red ~/w/dwarf.red\r");
+    drain(m);
+    send(m, "cat ~/w/dwarf.red\r");
+    o = drain(m);
+    CHECK(strstr(o, "MOV 0, 1") != NULL);
+    send(m, "mkdir ~/old\r");
+    send(m, "cp /bin/roc_help.md ~/old\r"); /* into a directory: keeps the name */
+    drain(m);
+    CHECK(vfs_lookup(&m->fs, "/home/guest/old/roc_help.md") != NULL);
+    send(m, "cp ~/old/roc_help.md ~/old/roc_help.md\r");
+    o = drain(m);
+    CHECK(strstr(o, "Invalid argument") != NULL);
+    h.pending = 0;
+    send(m, "cp /pub/kutta.md ~/k.md\r"); /* the site's: asked of the host */
+    CHECK(h.pending == 1 && strcmp(h.path, "/pub/kutta.md") == 0);
+    roc_feed_fail(m, h.req_id);
+    o = drain(m);
+    CHECK(strstr(o, "read error") != NULL);
+    send(m, "cp /bin/roc_help.md /pub/k.md\r");
+    o = drain(m);
+    CHECK(strstr(o, "Read-only file system") != NULL);
+
+    /* mv: rename a file, move a directory with what is in it, refuse the rest */
+    send(m, "mv ~/w/dwarf.red ~/w/stone.red\r");
+    drain(m);
+    CHECK(vfs_lookup(&m->fs, "/home/guest/w/dwarf.red") == NULL);
+    const uint8_t *d = NULL;
+    size_t n = 0;
+    CHECK(ufs_find(&m->uf, "/home/guest/w/stone.red", &d, &n) && n == 9);
+    send(m, "mv ~/w ~/old\r"); /* into a directory */
+    drain(m);
+    CHECK(vfs_lookup(&m->fs, "/home/guest/w") == NULL);
+    CHECK(vfs_lookup(&m->fs, "/home/guest/old/w")->dir);
+    CHECK(ufs_find(&m->uf, "/home/guest/old/w/imp.red", &d, &n) && n == 9);
+    CHECK(vfs_lookup(&m->fs, "/home/guest/old/w/stone.red") != NULL);
+    send(m, "mv ~/old ~/old/w/x\r");
+    o = drain(m);
+    CHECK(strstr(o, "Invalid argument") != NULL);
+    send(m, "mv /bin/help ~/h\r");
+    o = drain(m);
+    CHECK(strstr(o, "rocchetto: mv: /bin/help: Read-only file system") != NULL);
+    send(m, "mv ~/old/roc_help.md ~/old/w\r"); /* onto a file: replaced */
+    send(m, "mv ~/old/w/roc_help.md ~/old/w/imp.red\r");
+    drain(m);
+    CHECK(ufs_find(&m->uf, "/home/guest/old/w/imp.red", &d, &n) && n > 9);
+    send(m, "ls ~/old/w\r");
+    o = drain(m);
+    CHECK(strstr(o, "roc_help.md") == NULL && strstr(o, "imp.red") != NULL);
+    send(m, "rm ~/old\r");
+    o = drain(m);
+    CHECK(strstr(o, "rm: /home/guest/old: is a directory") != NULL);
+    send(m, "cd /\r");
+    drain(m);
+}
+
+/* A narrow terminal: ls keeps the name and the size, each row inside the
+   width (a date that wraps breaks every line). */
+static void test_narrow_ls(void) {
+    mock_host h;
+    roc *m = boot(&h);
+    drain(m);
+    roc_resize(m, 30, 20);
+    drain(m);
+    send(m, "ls /pub\r");
+    const char *o = drain(m);
+    CHECK(strstr(o, "kutta.md") != NULL && strstr(o, "2026-") == NULL);
+    const char *line = strstr(o, "\r\n");
+    while (line != NULL) {
+        const char *next = strstr(line + 2, "\r\n");
+        if (next == NULL) {
+            break;
+        }
+        size_t cols = 0;
+        for (const char *p = line + 2; p < next; p++) {
+            if (*p == '\x1b') {
+                while (p < next && !((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z'))) {
+                    p++; /* an escape takes no column */
+                }
+                continue;
+            }
+            if (((unsigned char)*p & 0xC0U) != 0x80U) {
+                cols++;
+            }
+        }
+        CHECK(cols <= 30);
+        line = next;
+    }
+    roc_resize(m, 80, 24);
+    drain(m);
+}
+
+/* The host says who is at the keyboard: the prompt and its column
+   arithmetic follow. No name is "guest". */
+static void test_user_name(void) {
+    mock_host h;
+    memset(&h, 0, sizeof(h));
+    roc_host host = {.filo_extend = roc_host_extend,
+                     .ctx = &h,
+                     .host_name = "shell.test",
+                     .site_base = "https://shell.test",
+                     .request = mock_request,
+                     .user = "ana"};
+    roc_init(&M, &host, 80, 24, ROC_F_NO_SPLASH);
+    h.pending = 0;
+    roc_feed(&M, h.req_id, (const uint8_t *)test_index, strlen(test_index));
+    roc_feed_eof(&M, h.req_id);
+    drain(&M);
+#if ROC_APP_BOARD
+    send(&M, "s\r");
+#else
+    send(&M, "\r");
+#endif
+    const char *o = drain(&M);
+    CHECK(strstr(o, "ana@shell.test") != NULL);
+    send(&M, "x\x1b[D"); /* prompt is 18 columns now, not 20 */
+    o = drain(&M);
+    CHECK(strstr(o, "\r\x1b[18C") != NULL);
+
+    /* a name the prompt cannot hold falls back to guest */
+    roc_host bad = {
+        .filo_extend = roc_host_extend, .ctx = &h, .request = mock_request, .user = "not a name"};
+    roc_init(&M, &bad, 80, 24, ROC_F_NO_SPLASH);
+    drain(&M);
+    CHECK(strcmp(M.user, "guest") == 0);
+}
+
+static void test_index_failure(void) {
+    mock_host h;
+    memset(&h, 0, sizeof(h));
+    roc_host host = {.filo_extend = roc_host_extend,
+                     .ctx = &h,
+                     .host_name = "shell.test",
+                     .site_base = "https://shell.test",
+                     .request = mock_request};
+    roc_init(&M, &host, 80, 24, ROC_F_NO_SPLASH);
+    roc_feed_fail(&M, h.req_id);
+    const char *o = drain(&M);
+    CHECK(strstr(o, "no index; ls/cat unavailable") != NULL);
+    send(&M, "cd /pub\r");
+    o = drain(&M);
+    CHECK(strstr(o, "rocchetto: no index") != NULL);
+}
+
 /* ---- the editor ---- */
 
 static void test_tbuf(void) {
@@ -4842,15 +5343,285 @@ static bool set_draw(roc *m, const char *src) {
     return screen_set_draw(m, (const uint8_t *)src, strlen(src));
 }
 
+static bool scr_bool(roc *m, const char *name) {
+    filo_value v = {0};
+    CHECK(filo_get_global(&m->scr.ctx, name, &v));
+    return v.u.b;
+}
+
+/* A tree read from disk, as the build left it under build/. */
+static uint8_t cp_bytes[1U << 20U];
+static tree_file cp_files[128];
+static size_t cp_n = 0;
+static char cp_paths[128][TREE_PATH_MAX];
+static size_t cp_used = 0;
+
+static void cp_walk(const char *dir, const char *prefix) {
+    DIR *d = opendir(dir);
+    if (d == NULL) {
+        return;
+    }
+    const struct dirent *e = NULL;
+    while ((e = readdir(d)) != NULL) {
+        if (e->d_name[0] == '.') {
+            continue;
+        }
+        char full[512];
+        char rel[TREE_PATH_MAX];
+        snprintf(full, sizeof(full), "%s/%s", dir, e->d_name);
+        snprintf(rel, sizeof(rel), "%s%s", prefix, e->d_name);
+        DIR *sub = opendir(full);
+        if (sub != NULL) {
+            closedir(sub);
+            char deeper[TREE_PATH_MAX];
+            snprintf(deeper, sizeof(deeper), "%s/", rel);
+            cp_walk(full, deeper);
+            continue;
+        }
+        FILE *f = fopen(full, "rb");
+        if (f == NULL || cp_n >= 128) {
+            if (f != NULL) {
+                fclose(f);
+            }
+            continue;
+        }
+        size_t n = fread(cp_bytes + cp_used, 1, sizeof(cp_bytes) - cp_used, f);
+        fclose(f);
+        snprintf(cp_paths[cp_n], TREE_PATH_MAX, "%s", rel);
+        cp_files[cp_n].path = cp_paths[cp_n];
+        cp_files[cp_n].data = cp_bytes + cp_used;
+        cp_files[cp_n].len = n;
+        cp_n++;
+        cp_used += n;
+    }
+    closedir(d);
+}
+
+static void cp_load(void) {
+    cp_n = 0;
+    cp_used = 0;
+    cp_walk("build/cardputer-tree", "");
+    cp_walk("build/cardputer-units", "");
+    CHECK(cp_n > 0);
+}
+
 /* The tree carries every Filo screen twice, as source and as the unit
    compiled from it (a member of the bundle), and the shell runs the unit. Each one must give what
    its source gives: the same cells after the first paint and after a key,
    the same error when there is one. */
+static canvas from_source;
+static tree_file sources_only[512];
+
+static bool compose_step(roc *m, const char *name, canvas *out, char *err, size_t cap) {
+    bool ok = screen_compose(m, name);
+    if (ok) {
+        ok = screen_key(m, FT_KEY_DOWN);
+        drain(m);
+    }
+    *out = m->cmp.target;
+    snprintf(err, cap, "%s", screen_error(m));
+    return ok;
+}
+
+static bool same_canvas(const canvas *a, const canvas *b) {
+    if (a->rows != b->rows || a->cols != b->cols) {
+        return false;
+    }
+    for (uint16_t y = 0; y < a->rows; y++) {
+        if (memcmp(a->cells[y], b->cells[y], sizeof(cv_cell) * a->cols) != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* The screens of a tree (all, with its bundle), each from its source and
+   from its unit; how many there were. The shell's tree is back after. */
+static int units_match_sources(roc *m, const tree_file *all, size_t n) {
+    size_t k = 0;
+    for (size_t i = 0; i < n && k < sizeof(sources_only) / sizeof(sources_only[0]); i++) {
+        if (strcmp(all[i].path, SCR_BUNDLE) != 0) {
+            sources_only[k] = all[i];
+            k++;
+        }
+    }
+    int units = 0;
+    for (size_t i = 0; i < n; i++) {
+        const char *slash = strchr(all[i].path, '/');
+        if (slash == NULL || strcmp(slash + 1, "init.filo") != 0) {
+            continue;
+        }
+        char name[TREE_PATH_MAX];
+        snprintf(name, sizeof(name), "%.*s", (int)(slash - all[i].path), all[i].path);
+        char err_src[SCR_ERROR_MAX];
+        char err_unit[SCR_ERROR_MAX];
+        tree_programs(m, sources_only, k);
+        bool ok_src = compose_step(m, name, &from_source, err_src, sizeof(err_src));
+        CHECK(m->scr.unit == NULL);
+        tree_set_source(all, n);
+        bool ok_unit = compose_step(m, name, &m->cmp.work, err_unit, sizeof(err_unit));
+        CHECK(m->scr.unit != NULL);
+        CHECK(ok_src == ok_unit);
+        CHECK(strcmp(err_src, err_unit) == 0);
+        CHECK(same_canvas(&from_source, &m->cmp.work));
+        if (!same_canvas(&from_source, &m->cmp.work) || strcmp(err_src, err_unit) != 0) {
+            printf("  screen %s: source and unit differ (%s | %s)\n", name, err_src, err_unit);
+        }
+        units++;
+    }
+    tree_set_source(NULL, 0);
+    return units;
+}
+
+static void test_screens_run_from_units(void) {
+    cp_load();
+    mock_host h;
+    roc *m = boot_menu(&h);
+    CHECK(units_match_sources(m, cp_files, cp_n) == 4);
+}
 
 /* The Cardputer's own screens, from the tree its firmware carries (made
    under build/ by the Makefile), on its 20x8 terminal: each one loads from
    its unit, the keys printed on its keycaps move around, and nothing reaches
    the panel that its ASCII font cannot draw. */
+static bool ascii_only(const canvas *c) {
+    for (uint16_t y = 0; y < c->rows; y++) {
+        for (uint16_t x = 0; x < c->cols; x++) {
+            if (c->cells[y][x].cp >= 0x7F) {
+                printf("  non-ASCII U+%04X at row %u col %u\n", (unsigned)c->cells[y][x].cp, y, x);
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+static void cp_on(roc *m, const char *name) {
+    CHECK(strcmp(m->scr.name, name) == 0);
+    CHECK(m->scr.unit != NULL);
+    CHECK(screen_error(m)[0] == '\0');
+    CHECK(m->cmp.target.cols == 20 && m->cmp.target.rows == 8);
+    CHECK(ascii_only(&m->cmp.target));
+}
+
+static void test_cardputer_screens(void) {
+    cp_load();
+    tree_set_source(cp_files, cp_n);
+    mock_host h;
+    roc *m = boot_menu(&h);
+#if !ROC_APP_BOARD
+    screen_enter(m, "main"); /* no board to boot to: the firmware opens it */
+#endif
+    roc_resize(m, 20, 8);
+    drain(m);
+    cp_on(m, "main");
+    CHECK(canvas_has(&m->cmp.target, "[S] Shell"));
+
+    send(m, "f");
+    drain(m);
+    cp_on(m, "files");
+    send(m, "/"); /* the right arrow's keycap: over to /bin */
+    drain(m);
+    cp_on(m, "files");
+    CHECK(canvas_has(&m->cmp.target, "/bin"));
+    CHECK(canvas_has(&m->cmp.target, "help"));
+    send(m, ".");
+    drain(m);
+    CHECK(scr_num(m, "sel") == 1);
+    send(m, "\r"); /* reads it in the pager, over the list */
+    drain(m);
+    CHECK(!screen_is_top(m));
+    send(m, "q");
+    drain(m);
+    CHECK(screen_is_top(m));
+    cp_on(m, "files");
+    CHECK(scr_num(m, "sel") == 1);
+    send(m, "`");
+    drain(m);
+    cp_on(m, "main");
+
+    send(m, "n");
+    drain(m);
+    cp_on(m, "snake-filo");
+    CHECK(!scr_bool(m, "cramped"));
+    CHECK(canvas_has(&m->cmp.target, "@"));
+    CHECK(canvas_has(&m->cmp.target, "*"));
+    for (int i = 0; i < 5; i++) { /* it waits for the first arrow */
+        roc_tick(m, (uint32_t)scr_num(m, "STEP_MS"));
+        drain(m);
+    }
+    CHECK(!scr_bool(m, "started"));
+    CHECK(canvas_has(&m->cmp.target, "to go"));
+    send(m, "/");
+    drain(m);
+    CHECK(scr_bool(m, "started"));
+    for (int i = 0; i < 30 && !scr_bool(m, "over"); i++) {
+        roc_tick(m, (uint32_t)scr_num(m, "STEP_MS"));
+        drain(m);
+    }
+    CHECK(scr_bool(m, "over")); /* straight ahead meets the wall */
+    cp_on(m, "snake-filo");
+    CHECK(canvas_has(&m->cmp.target, "GAME OVER"));
+    send(m, "r");
+    drain(m);
+    CHECK(!scr_bool(m, "over"));
+    send(m, "`");
+    drain(m);
+
+    send(m, "i");
+    drain(m);
+    cp_on(m, "info");
+    CHECK(canvas_has(&m->cmp.target, "20 x 8"));
+    send(m, "x");
+    drain(m);
+    cp_on(m, "main");
+    tree_set_source(NULL, 0);
+    roc_resize(m, 80, 24);
+}
+
+/* No Filo file that ships defines a name the scripts' context has as a
+   builtin: the builtin would take its place without a word, as a builtin
+   "status" once did to home.filo's own function. How many files it read. */
+static size_t shadows_checked(const filo_ctx *ctx, const tree_file *all, size_t n) {
+    size_t files = 0;
+    for (size_t i = 0; i < n; i++) {
+        size_t pl = strlen(all[i].path);
+        if (pl < 5 || strcmp(all[i].path + pl - 5, ".filo") != 0) {
+            continue;
+        }
+        files++;
+        for (uint32_t b = 0; b < ctx->nbuiltins; b++) {
+            char def[80];
+            size_t k = (size_t)snprintf(def, sizeof(def), "(def %s", ctx->builtins[b].name);
+            const uint8_t *p = all[i].data;
+            size_t left = all[i].len;
+            const uint8_t *hit = NULL;
+            while ((hit = memmem(p, left, def, k)) != NULL) {
+                size_t at = (size_t)(hit - all[i].data) + k;
+                if (at < all[i].len && strchr(" \t\r\n", all[i].data[at]) != NULL) {
+                    fprintf(stderr, "%s defines builtin %s\n", all[i].path, ctx->builtins[b].name);
+                    CHECK(false);
+                    break;
+                }
+                left = all[i].len - (size_t)(hit + 1 - all[i].data);
+                p = hit + 1;
+            }
+        }
+    }
+    return files;
+}
+
+static void test_builtins_shadow_nothing(void) {
+    mock_host h;
+    roc *m = boot(&h);
+    const filo_ctx *ctx = script_context(m);
+    CHECK(!m->sc.broken && ctx->nbuiltins < FILO_BUILTINS_MAX);
+    cp_n = 0;
+    cp_used = 0;
+    cp_walk(ROC_ROOT "/commands", "commands/");
+    cp_walk("build/cardputer-tree", "cardputer/");
+    CHECK(shadows_checked(ctx, cp_files, cp_n) > 50); /* the commands and the Cardputer's */
+}
 
 /* Each command runs in a fresh context: the arena does not grow from one to
    the next, and what one defined the next does not see. */
@@ -6927,6 +7698,528 @@ static void test_screen_field_limits_and_masking(void) {
     CHECK(m->scr.in.runes == 4);
 }
 
+/* A screen of the test's own, shaped as a shell's screens are: a common file
+   ahead of it, init, hooks, art beside it, and a C app it opens by name. */
+static const char fix_common[] =
+    "(def centred (fn (row text) (print-at row (floor (/ (- W (text-width text)) 2)) text)))\n"
+    "(def single (list \"\xe2\x94\x8c\" \"\xe2\x94\x80\" \"\xe2\x94\x90\" \"\xe2\x94\x82\""
+    " \"\xe2\x94\x98\" \"\xe2\x94\x80\" \"\xe2\x94\x94\" \"\xe2\x94\x82\"))\n";
+static const char fix_init[] = "(def title \"the fixture\")\n(def who \"\")\n(def hits 0)\n";
+static const char fix_draw[] = "(box 0 0 H W single)\n"
+                               "(blit 2 2 \"art.ans\")\n"
+                               "(fg 6)\n"
+                               "(centred (/ H 3) title)\n"
+                               "(fg C_DEFAULT)\n"
+                               "(if (is-empty who)\n"
+                               "  (centred (+ (/ H 3) 2) (str-fmt \"%d keys pressed\" hits))\n"
+                               "  (centred (+ (/ H 3) 2) (str-concat \"hello, \" who)))\n"
+                               "(print-at (- H 2) 2 NOTE)\n"
+                               "(let ((label \"name: \") (left (floor (/ (- W 26) 2))))\n"
+                               "  (print-at (- H 3) left label)\n"
+                               "  (input-at (- H 3) (+ left (text-width label)) 20 16 #f))\n";
+static const char fix_key[] =
+    "(cond\n"
+    "  ((= KEY KEY_DOWN) (exec \"fix\"))\n"
+    "  ((= KEY KEY_RIGHT)\n"
+    "    (exec \"fight\" \"/lib/roc/warriors/imp.red /lib/roc/warriors/dwarf.red\"))\n"
+    "  (else (set hits (+ hits 1))))\n";
+static const char fix_input[] = "(set who (input-text))\n";
+/* relative moves and a background colour, as a drawing program writes them */
+static const char fix_art[] = "\x1b[102m          \x1b[B\x1b[10D          \x1b[2C  \x1b[m";
+
+static void fixture_screen(roc *m) {
+    const uint8_t *imp = NULL;
+    const uint8_t *dwarf = NULL;
+    size_t imp_len = 0;
+    size_t dwarf_len = 0;
+    CHECK(tree_find_file("warriors/imp.red", &imp, &imp_len));
+    CHECK(tree_find_file("warriors/dwarf.red", &dwarf, &dwarf_len));
+    const tree_file tree[] = {
+        {"common.filo", (const uint8_t *)fix_common, sizeof(fix_common) - 1},
+        {"fix/init.filo", (const uint8_t *)fix_init, sizeof(fix_init) - 1},
+        {"fix/draw.filo", (const uint8_t *)fix_draw, sizeof(fix_draw) - 1},
+        {"fix/key.filo", (const uint8_t *)fix_key, sizeof(fix_key) - 1},
+        {"fix/input.filo", (const uint8_t *)fix_input, sizeof(fix_input) - 1},
+        {"fix/art.ans", (const uint8_t *)fix_art, sizeof(fix_art) - 1},
+        {"warriors/imp.red", imp, imp_len},
+        {"warriors/dwarf.red", dwarf, dwarf_len},
+    };
+    tree_programs(m, tree, sizeof(tree) / sizeof(tree[0]));
+}
+
+static void test_screen_loads_from_the_tree(void) {
+    mock_host h;
+    roc *m = boot_menu(&h);
+    drain(m);
+    fixture_screen(m);
+
+    CHECK(screen_load(m, "fix"));
+    CHECK(screen_error(m)[0] == '\0');
+    const canvas *c = &m->cmp.target;
+
+    /* the common file defined the helper and the border the screen used, so
+       both files ran before init */
+    CHECK(c->cells[0][0].cp == 0x250C);
+    CHECK(c->cells[0][1].cp == 0x2500);
+    CHECK(c->cells[23][0].cp == 0x2514);
+    CHECK(strstr(canvas_row(c, 8), "the fixture") != NULL);
+    CHECK(strstr(canvas_row(c, 10), "0 keys pressed") != NULL);
+    CHECK(strstr(canvas_row(c, 21), "name:") != NULL);
+
+    /* centred means centred, counted in cells: the border is three bytes a
+       column, so only the grid can answer this */
+    CHECK(c->cells[8][34].cp == 't');
+    CHECK(c->cells[8][44].cp == 'e');
+    CHECK(c->cells[8][33].cp == ' ');
+    tree_set_source(NULL, 0);
+}
+
+/* The globals are closed once init has run, so a name typed wrong in a hook
+   cannot reach the user: it fails while the screen is loading. */
+static void test_screen_seals_its_globals(void) {
+    mock_host h;
+    roc *m = boot_menu(&h);
+    drain(m);
+    fixture_screen(m);
+    CHECK(screen_load(m, "fix"));
+
+    filo_prog p;
+    const char *bad = "(set htis 1)";
+    CHECK(filo_compile(&m->scr.ctx, (const uint8_t *)bad, strlen(bad), &p) != FILO_OK);
+    CHECK(strstr(filo_error(&m->scr.ctx), "htis") != NULL);
+
+    const char *good = "(set hits 1)";
+    CHECK(filo_compile(&m->scr.ctx, (const uint8_t *)good, strlen(good), &p) == FILO_OK);
+    tree_set_source(NULL, 0);
+}
+
+static void test_screen_key_hook_and_navigation(void) {
+    mock_host h;
+    roc *m = boot_menu(&h);
+    drain(m);
+    fixture_screen(m);
+    CHECK(screen_load(m, "fix"));
+    drain(m);
+
+    CHECK(screen_key(m, FT_KEY_UP));
+    CHECK(strstr(canvas_row(&m->cmp.target, 10), "1 keys pressed") != NULL);
+    /* one digit changed, so one digit goes out: the rest of the line is
+       already on the terminal */
+    const char *o = drain(m);
+    CHECK(strstr(o, "1") != NULL);
+    CHECK(strstr(o, "keys") == NULL);
+    CHECK(strlen(o) < 48);
+
+    CHECK(screen_key(m, FT_KEY_UP));
+    CHECK(strstr(canvas_row(&m->cmp.target, 10), "2 keys pressed") != NULL);
+
+    /* navigating starts the screen over, so its state goes with the context */
+    CHECK(screen_key(m, FT_KEY_DOWN));
+    CHECK(strcmp(m->scr.name, "fix") == 0);
+    CHECK(strstr(canvas_row(&m->cmp.target, 10), "0 keys pressed") != NULL);
+    tree_set_source(NULL, 0);
+}
+
+static void test_screen_load_failures_are_named(void) {
+    mock_host h;
+    roc *m = boot_menu(&h);
+    drain(m);
+    CHECK(!screen_load(m, "nosuch"));
+    CHECK(strstr(screen_error(m), "nosuch/init.filo") != NULL);
+}
+
+/* A name that is not a screen fails on its missing init, before the common
+   file is compiled: on a board the arena for that compile may not exist, and
+   "out of memory" would hide what actually went wrong. */
+static void test_missing_screen_names_its_init(void) {
+    mock_host h;
+    roc *m = boot_menu(&h);
+    fixture_screen(m);
+    CHECK(!screen_compose(m, "no-such-screen"));
+    CHECK(strstr(screen_error(m), "no-such-screen/init.filo") != NULL);
+    filo_value v = {0};
+    CHECK(!filo_get_global(&m->scr.ctx, "centred", &v)); /* common.filo's */
+    tree_set_source(NULL, 0);
+}
+
+/* Art becomes cells: a drawing program writes relative cursor moves and the
+   sixteen colours, and all of it has to survive the trip into the grid. */
+static void test_screen_blits_art(void) {
+    mock_host h;
+    roc *m = boot_menu(&h);
+    drain(m);
+    fixture_screen(m);
+    CHECK(screen_load(m, "fix"));
+
+    int colored = 0;
+    uint16_t y = 0;
+    while (y < m->cmp.target.rows) {
+        uint16_t x = 0;
+        while (x < m->cmp.target.cols) {
+            if (m->cmp.target.cells[y][x].bg == 10) { /* bright green, SGR 102 */
+                colored++;
+            }
+            x++;
+        }
+        y++;
+    }
+    CHECK(colored == 22);
+    CHECK(m->cmp.target.cells[3][2].bg == 10 && m->cmp.target.cells[3][13].bg != 10);
+    CHECK(m->cmp.target.cells[3][14].bg == 10); /* two columns skipped, not painted */
+
+    /* it lands as a fragment: the box the screen drew around it survives */
+    CHECK(m->cmp.target.cells[0][0].cp == 0x250C);
+    CHECK(m->cmp.target.cells[23][0].cp == 0x2514);
+
+    /* a file the tree does not have names itself */
+    const char *src = "(blit 0 0 \"nope.ans\")";
+    CHECK(screen_set_draw(m, (const uint8_t *)src, strlen(src)));
+    CHECK(!screen_paint(m));
+    CHECK(strstr(screen_error(m), "nope.ans") != NULL);
+    tree_set_source(NULL, 0);
+}
+
+/* The field: the shell owns the text, a screen reads it when enter closes
+   the line, and the terminal's own cursor sits where the caret is. */
+static void test_screen_field_typing(void) {
+    mock_host h;
+    roc *m = boot_menu(&h);
+    drain(m);
+    fixture_screen(m);
+    CHECK(screen_load(m, "fix"));
+    drain(m);
+
+    const char *word = "ana";
+    for (const char *p = word; *p != '\0'; p++) {
+        CHECK(screen_key(m, (uint32_t)*p));
+    }
+    CHECK(strstr(canvas_row(&m->cmp.target, 21), "name: ana") != NULL);
+
+    /* backspace takes a whole rune, and Ctrl-U takes the line */
+    CHECK(screen_key(m, 0x7F));
+    CHECK(strstr(canvas_row(&m->cmp.target, 21), "name: an ") != NULL);
+    CHECK(screen_key(m, 'a'));
+    CHECK(screen_key(m, 0x15));
+    CHECK(strstr(canvas_row(&m->cmp.target, 21), "name:  ") != NULL);
+
+    /* a multibyte rune goes in and comes out whole */
+    CHECK(screen_key(m, 'c'));
+    CHECK(screen_key(m, 'a'));
+    CHECK(screen_key(m, 'f'));
+    CHECK(screen_key(m, 0xE9));
+    CHECK(strstr(canvas_row(&m->cmp.target, 21), "caf\xc3\xa9") != NULL);
+
+    /* enter hands it to the screen, which keeps it, and clears the field */
+    CHECK(screen_key(m, '\r'));
+    CHECK(strstr(canvas_row(&m->cmp.target, 10), "hello, caf\xc3\xa9") != NULL);
+    CHECK(strstr(canvas_row(&m->cmp.target, 21), "name:  ") != NULL);
+
+    /* the cursor is shown and parked at the caret */
+    const char *o = drain(m);
+    CHECK(strstr(o, "\x1b[?25h") != NULL || m->scr.cursor_shown);
+    CHECK(m->scr.caret_row == 21);
+    tree_set_source(NULL, 0);
+}
+
+/* the field of a screen edits like a line: caret, insert, delete, ends */
+static void test_field_editing(void) {
+    mock_host h;
+    roc *m = boot_menu(&h);
+    fixture_screen(m);
+    screen_enter(m, "fix");
+    drain(m);
+    send(m, "abc");
+    send(m, "\x1b[D\x1b[D"); /* two left */
+    send(m, "X");
+    drain(m);
+    CHECK(m->scr.in.len == 4 && memcmp(m->scr.in.buf, "aXbc", 4) == 0);
+    CHECK(m->scr.in.cur == 2);
+    CHECK(canvas_has(&m->cmp.target, "aXbc"));
+    send(m, "\x1b[H");  /* Home */
+    send(m, "\x1b[3~"); /* Delete */
+    drain(m);
+    CHECK(m->scr.in.len == 3 && memcmp(m->scr.in.buf, "Xbc", 3) == 0 && m->scr.in.cur == 0);
+    send(m, "\x1b[F"); /* End */
+    send(m, "\x7f");   /* Backspace */
+    drain(m);
+    CHECK(m->scr.in.len == 2 && memcmp(m->scr.in.buf, "Xb", 2) == 0);
+    send(m, "\x1b[D\xc3\xa9"); /* é before b */
+    drain(m);
+    CHECK(m->scr.in.len == 4 && memcmp(m->scr.in.buf,
+                                       "X\xc3\xa9"
+                                       "b",
+                                       4) == 0);
+    CHECK(m->scr.caret_col > 0);
+    send(m, "\x15"); /* Ctrl-U */
+    drain(m);
+    CHECK(m->scr.in.len == 0 && m->scr.in.cur == 0);
+    tree_set_source(NULL, 0);
+}
+
+/* A screen loaded by a key with the caret left inside the text of the one
+   before: the field starts over, caret too. */
+static void test_screen_field_reset(void) {
+    mock_host h;
+    roc *m = boot_menu(&h);
+    fixture_screen(m);
+    screen_enter(m, "fix");
+    drain(m);
+    send(m, "abc\x1b[D"); /* the caret before the c */
+    drain(m);
+    send(m, "\x1b[B"); /* down: the screen again */
+    drain(m);
+    send(m, "x"); /* ASan: the insert moved a negative length */
+    drain(m);
+    CHECK(m->scr.in.len == 1 && m->scr.in.cur == 1);
+    tree_set_source(NULL, 0);
+}
+
+/* A key that takes the shell to a screen that fails to start: not a
+   half-built screen that answers nothing, but the front screen again with
+   the error as its note, or the prompt when there is no front screen. */
+static void test_screen_failed_key_recovers(void) {
+    static const char main_init[] = "(def x 0)";
+    static const char main_draw[] = "(do (print-at 0 0 NOTE) (input-at 2 0 10 5 #f))";
+    static const char main_input[] = "(exec \"boom\")";
+    static const char boom_init[] = "(error \"boom at init\")";
+    static const char boom_draw[] = "(print-at 0 0 \"never\")";
+    static const tree_file tree[] = {
+        {"main/init.filo", (const uint8_t *)main_init, sizeof(main_init) - 1},
+        {"main/draw.filo", (const uint8_t *)main_draw, sizeof(main_draw) - 1},
+        {"main/input.filo", (const uint8_t *)main_input, sizeof(main_input) - 1},
+        {"boom/init.filo", (const uint8_t *)boom_init, sizeof(boom_init) - 1},
+        {"boom/draw.filo", (const uint8_t *)boom_draw, sizeof(boom_draw) - 1},
+    };
+    mock_host h;
+    roc *m = boot_menu(&h);
+    drain(m);
+    tree_programs(m, tree, 5);
+    screen_enter(m, "main");
+    drain(m);
+    send(m, "go\r");
+    const char *o = drain(m);
+#if ROC_APP_BOARD
+    (void)o;
+    CHECK(strcmp(m->scr.name, "main") == 0);
+    CHECK(strstr(canvas_row(&m->cmp.target, 0), "boom at init") != NULL);
+#else
+    CHECK(m->t.napps == 0 && m->mode == ROC_MODE_LINE);
+    CHECK(strstr(o, "boom at init") != NULL);
+#endif
+    tree_set_source(NULL, 0);
+}
+
+/* Not every screen is written in Filo: Core War's arena is a C app, and a
+   script opens it by name like any other screen. */
+static void test_screen_opens_an_app_and_comes_back(void) {
+    mock_host h;
+    roc *m = boot_menu(&h);
+    drain(m);
+    fixture_screen(m);
+    screen_enter(m, "fix");
+    CHECK(screen_error(m)[0] == '\0');
+    size_t depth = m->t.napps;
+    drain(m);
+
+    CHECK(screen_key(m, FT_KEY_RIGHT));
+    CHECK(m->t.napps == depth + 1); /* the arena is on top */
+    const char *o = drain(m);
+    CHECK(strstr(o, "the fixture") == NULL); /* the screen did not paint under it */
+
+    /* coming back repaints in full, since the app painted over everything */
+    roc_app_leave(m, NULL);
+    CHECK(m->t.napps == depth);
+    o = drain(m);
+    CHECK(strstr(o, "the fixture") != NULL);
+    CHECK(strstr(o, "name:") != NULL);
+    tree_set_source(NULL, 0);
+}
+
+/* A program that a screen opened goes back to that screen when it is
+   done, not to the shell under it: a game chosen from a list returns to
+   the list. (edt names its way back in RET; this is what a program with
+   no RET gets.) */
+static void test_done_goes_back(void) {
+    static const char list_init[] = "(def x 0)";
+    static const char list_draw[] = "(print-at 0 0 \"the list\")";
+    static const char game_init[] = "(def y 0)";
+    static const char game_draw[] = "(print-at 0 0 \"the game\")";
+    static const tree_file tree[] = {
+        {"list/init.filo", (const uint8_t *)list_init, sizeof(list_init) - 1},
+        {"list/draw.filo", (const uint8_t *)list_draw, sizeof(list_draw) - 1},
+        {"game/init.filo", (const uint8_t *)game_init, sizeof(game_init) - 1},
+        {"game/draw.filo", (const uint8_t *)game_draw, sizeof(game_draw) - 1},
+    };
+    mock_host h;
+    roc *m = boot_menu(&h);
+    tree_programs(m, tree, 4);
+    screen_enter(m, "list");
+    size_t depth = m->t.napps;
+    CHECK(screen_load(m, "game")); /* led here from the list */
+    drain(m);
+    CHECK(set_draw(m, "(do (done) (print-at 0 0 \"x\"))"));
+    send(m, "a"); /* the paint after it runs the draw, which asks to leave */
+    send(m, "b"); /* the next event settles it */
+    drain(m);
+    CHECK(strcmp(m->scr.name, "list") == 0);
+    CHECK(m->t.napps == depth);
+    tree_set_source(NULL, 0);
+}
+
+static char picked[VFS_PATH_MAX];
+
+static void mock_pick_file(void *ctx, const char *dest) {
+    (void)ctx;
+    snprintf(picked, sizeof(picked), "%s", dest);
+}
+
+static void test_upload(void) {
+    mock_host h;
+    roc *m = boot(&h);
+    drain(m);
+
+    /* dropped at the site's root, a file goes to ~/uploads, made for it */
+    send(m, "cat ");
+    drain(m);
+    drop(m, "notes.txt", "", "hello\n");
+    const char *o = drain(m);
+    CHECK(strstr(o, "uploaded /home/guest/uploads/notes.txt (6)") != NULL);
+    CHECK(strstr(o, "$ cat ") != NULL); /* the line came back */
+    send(m, "~/uploads/notes.txt\r");
+    o = drain(m);
+    CHECK(strstr(o, "hello\r\n") != NULL);
+    send(m, "ls -l ~/uploads\r");
+    o = drain(m);
+    CHECK(strstr(o, "notes.txt") != NULL);
+    CHECK(strstr(o, " 6 ") != NULL);
+
+    /* in the home, a drop lands where the person is; a space in the name
+       becomes an underscore so the shell can say it */
+    send(m, "cd ~\r");
+    drain(m);
+    CHECK(strcmp(m->cwd, "/home/guest") == 0);
+    drop(m, "my file.txt", "", "x");
+    o = drain(m);
+    CHECK(strstr(o, "uploaded /home/guest/my_file.txt (1)") != NULL);
+    send(m, "ls -F\r");
+    o = drain(m);
+    CHECK(strstr(o, "my_file.txt") != NULL);
+    CHECK(strstr(o, "uploads/") != NULL);
+
+    /* a script of the person's own runs like any other */
+    drop(m, "hi.filo", "", "(echo \"hi from\" (pwd))");
+    drain(m);
+    send(m, "filo hi.filo\r");
+    o = drain(m);
+    CHECK(strstr(o, "hi from /home/guest\r\n") != NULL);
+    send(m, "filo ~/hi.filo\r");
+    o = drain(m);
+    CHECK(strstr(o, "hi from /home/guest\r\n") != NULL);
+
+    /* the same name again is the new file, nothing kept of the old */
+    size_t before = m->uf.used;
+    drop(m, "my file.txt", "", "yz");
+    drain(m);
+    CHECK(m->uf.used == before + 1);
+    send(m, "cat my_file.txt\r");
+    o = drain(m);
+    CHECK(strstr(o, "yz\r\n") != NULL);
+    CHECK(vfs_lookup(&m->fs, "/home/guest/my_file.txt")->size == 2);
+
+    /* refusals, each said once, in the words Unix has always used */
+    {
+        static uint8_t big[UFS_FILE_MAX];
+        memset(big, 'a', sizeof(big));
+        const char *names[] = {"b1", "b2", "b3"};
+        size_t i = 0;
+        while (i < 3) {
+            CHECK(roc_upload_begin(m, names[i], "", sizeof(big)));
+            roc_upload_data(m, big, sizeof(big));
+            roc_upload_end(m);
+            i++;
+        }
+        drain(m);
+        /* the home already holds a few bytes: a fourth 512K does not fit */
+        CHECK(!roc_upload_begin(m, "b4", "", sizeof(big)));
+        o = drain(m);
+        CHECK(strstr(o, "rocchetto: upload: b4: Disc quota exceeded") != NULL);
+        send(m, "rm b1\r");
+        send(m, "rm b2\r");
+        send(m, "rm b3\r");
+        drain(m);
+        CHECK(m->uf.nfiles == 3); /* my_file.txt, hi.filo, uploads/notes.txt */
+    }
+    CHECK(!roc_upload_begin(m, "big.bin", "", UFS_FILE_MAX + 1));
+    o = drain(m);
+    CHECK(strstr(o, "rocchetto: upload: big.bin: File too large") != NULL);
+    CHECK(!roc_upload_begin(m, "x", "/pub", 1));
+    o = drain(m);
+    CHECK(strstr(o, "Read-only file system") != NULL);
+    CHECK(!roc_upload_begin(m, "..", "", 1));
+    o = drain(m);
+    CHECK(strstr(o, "rocchetto: upload: ..: Invalid argument") != NULL);
+    CHECK(!roc_upload_begin(m, "uploads", "", 1));
+    o = drain(m);
+    CHECK(strstr(o, "rocchetto: upload: uploads: Is a directory") != NULL);
+    drop(m, "in.txt", "~/uploads", "q");
+    o = drain(m);
+    CHECK(strstr(o, "uploaded /home/guest/uploads/in.txt (1)") != NULL);
+
+    /* rm takes the person's files and nothing else */
+    send(m, "rm ~/uploads/notes.txt\r");
+    drain(m);
+    send(m, "ls uploads\r");
+    o = drain(m);
+    CHECK(strstr(o, "notes.txt") == NULL);
+    CHECK(strstr(o, "in.txt") != NULL);
+    send(m, "rm /readme.txt\r");
+    o = drain(m);
+    CHECK(strstr(o, "rocchetto: rm: /readme.txt: Read-only file system") != NULL);
+    send(m, "rm nothere\r");
+    o = drain(m);
+    CHECK(strstr(o, "rm: nothere: No such file or directory") != NULL);
+    send(m, "rm\r");
+    o = drain(m);
+    CHECK(strstr(o, "usage: rm [-fRr] file...") != NULL);
+
+    /* upload asks the host for files, with the directory settled first */
+    send(m, "upload\r");
+    o = drain(m);
+    CHECK(strstr(o, "rocchetto: upload: No such device") != NULL);
+    m->host.pick_file = mock_pick_file;
+    picked[0] = '\0';
+    send(m, "upload\r");
+    drain(m);
+    CHECK(strcmp(picked, "/home/guest") == 0);
+    send(m, "cd /\r");
+    drain(m);
+    send(m, "upload\r");
+    drain(m);
+    CHECK(strcmp(picked, "/home/guest/uploads") == 0);
+    send(m, "upload ~/uploads\r");
+    drain(m);
+    CHECK(strcmp(picked, "/home/guest/uploads") == 0);
+    picked[0] = '\0';
+    send(m, "upload /pub\r");
+    o = drain(m);
+    CHECK(strstr(o, "Read-only file system") != NULL);
+    CHECK(picked[0] == '\0');
+    send(m, "upload ~/nothere\r");
+    o = drain(m);
+    CHECK(strstr(o, "rocchetto: upload: /home/guest/nothere: No such file or directory") != NULL);
+
+    /* with a screen up, the word goes to the screen's note line */
+    fixture_screen(m);
+    screen_enter(m, "fix");
+    drain(m);
+    size_t depth = m->t.napps;
+    drop(m, "late.txt", "", "z");
+    drain(m);
+    CHECK(canvas_has(&m->cmp.target, "uploaded /home/guest/uploads/late.txt (1)"));
+    CHECK(m->t.napps == depth);
+    tree_set_source(NULL, 0);
+}
+
 /* The tree that ships in the binary is the factory copy, and what the user
    writes shadows it. That is the whole recovery story for a system that
    edits itself: a bad edit is undone by removing the copy, and nothing the
@@ -7217,6 +8510,29 @@ static void roc_tests(void) {
     RUN(test_screen_field_limits_and_masking);
     RUN(test_user_files_shadow_the_tree);
     RUN(test_ed_edits_by_line);
+    RUN(test_small_commands);
+    RUN(test_scripts);
+    RUN(test_upload);
+    RUN(test_fs_commands);
+    RUN(test_home_kept);
+    RUN(test_narrow_ls);
+    RUN(test_user_name);
+    RUN(test_index_failure);
+    RUN(test_builtins_shadow_nothing);
+    RUN(test_cardputer_screens);
+    RUN(test_screens_run_from_units);
+    RUN(test_missing_screen_names_its_init);
+    RUN(test_screen_loads_from_the_tree);
+    RUN(test_screen_seals_its_globals);
+    RUN(test_screen_key_hook_and_navigation);
+    RUN(test_screen_load_failures_are_named);
+    RUN(test_screen_blits_art);
+    RUN(test_screen_field_typing);
+    RUN(test_field_editing);
+    RUN(test_screen_field_reset);
+    RUN(test_screen_failed_key_recovers);
+    RUN(test_screen_opens_an_app_and_comes_back);
+    RUN(test_done_goes_back);
 }
 
 #ifndef ROC_TEST_NO_MAIN
