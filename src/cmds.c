@@ -3273,24 +3273,7 @@ static void run_named(roc *m, const sh_line *sl, char *rest) {
         return;
     }
     if (strcmp(cmd, "help") == 0 || strcmp(cmd, "?") == 0) {
-        /* the app's own commands: under the pager, there when it closes;
-           after the text when a | or a > takes it */
-        bool app = false;
-        if (m->host.commands != NULL) {
-            app = m->host.commands[0] != '\0';
-        }
-        bool paged = roc_out_terminal(m);
-        if (app && paged) {
-            term_puts(&m->t, "from the app too: ");
-            term_puts(&m->t, m->host.commands);
-            term_puts(&m->t, "\r\n");
-        }
         (void)script_run(m, "help", rest);
-        if (app && !paged) {
-            roc_out(m, (const uint8_t *)"\nand from the app: ", 19);
-            roc_out(m, (const uint8_t *)m->host.commands, strlen(m->host.commands));
-            roc_out(m, (const uint8_t *)"\n", 1);
-        }
     } else if (strcmp(cmd, "filo") == 0) {
         if (sl->argc == 1) {
             script_repl_begin(m); /* no file: the language itself */

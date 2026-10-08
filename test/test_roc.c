@@ -293,14 +293,11 @@ static void test_host_runs_commands(void) {
     CHECK(strstr(drain(&M), "not found") != NULL);
     send(&M, "type ssh\r");
     CHECK(strstr(drain(&M), "ssh is a command of the app") != NULL);
-    send(&M, "help\r"); /* the app's commands go under the pager, and after a | */
+    send(&M, "help\r"); /* the pager, and nothing under it: help documents the app's */
     o = drain(&M);
-    CHECK(strstr(o, "from the app too: ssh key") != NULL && M.t.napps == 1);
+    CHECK(strstr(o, "from the app") == NULL && M.t.napps == 1);
     send(&M, "q");
     drain(&M);
-    send(&M, "help | tail -n 1\r");
-    o = drain(&M);
-    CHECK(strstr(o, "\r\nand from the app: ssh key") != NULL);
     send(&M, "ss\t");
     CHECK(strstr(drain(&M), "ssh") != NULL);
 }
@@ -4073,6 +4070,11 @@ static void test_pager_search(void) {
     send(m, "N");
     drain(m);
     CHECK(m->pg.top == 30);
+    send(m, "/\r"); /* / and Enter alone: the last pattern again */
+    drain(m);
+    CHECK(m->pg.top == 50 || m->pg.top == m->pg.nrows - (m->t.rows - 1U));
+    send(m, "N");
+    drain(m);
     send(m, "/BETA\r"); /* a capital: only itself */
     o = drain(m);
     CHECK(strstr(o, "Pattern not found") != NULL && m->pg.top == 30);
@@ -4083,6 +4085,7 @@ static void test_pager_search(void) {
     roc_tick(m, 1000);
     drain(m);
     CHECK(!m->pg.typing && m->pg.top == 0); /* Esc gives up, and does not close */
+    CHECK(m->pg.patlen == 4 && memcmp(m->pg.pat, "BETA", 4) == 0); /* the last one stays */
     send(m, "q");
     drain(m);
     CHECK(m->mode == ROC_MODE_LINE);
