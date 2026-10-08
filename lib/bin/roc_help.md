@@ -75,6 +75,17 @@ The shell carries its own files: the programs behind commands like this one live
 - `mars <a.red> <b.red> [more...] [-r N] [-F pos] [-b]` — Core War: Redcode warriors fight in the MARS (ICWS'94) on screen, and the score comes out when you leave; `-b` fights in text alone. Classics live in `/lib/roc/warriors`, yours in `~` (write them with `edt`)
 - `corewar [<a.red> <b.red> ...]` — Core War, two warriors or up to eight. With no files it opens the screen that picks them: the classic warriors and your own `.red` files in `~`, which it also edits (`e N`) or starts new (`n name`); `h` there opens the Redcode manual, which the editor opens too, with `Esc` then `H`. Then the fight: the core as a map, a colour per warrior, the code each one is executing beside it, and what would end the round. Space pauses, + and - set the speed, M picks the core (standard, tiny or nano), C how many cycles a round lasts, N calls the round, R rematches
 
+## In the fosforo app (iPad and iPhone)
+
+The app's own commands, beside the shell's:
+
+- `ssh [-vAN] [-p port] [-l user] [-i file] [-o option=value] [-J jump] [-L ...] [-R ...] [-D ...] [user@]host` — a shell on another machine. A host named in `~/.ssh/config` is reached by its name (`ssh lab`), and one marked `Mosh yes` there goes over Mosh
+- `mosh [-v] [-p port] [user@]host` — Mosh: the session lives through a change of network and the device sleeping. The host needs `mosh-server`; `MoshServer PATH` in `~/.ssh/config` says where, when it is not in the PATH
+- `key` — this device's own key: its public line, to add to a server's `~/.ssh/authorized_keys`. `key list` shows the keys in `~/.ssh`; `key protect NAME` keeps one encrypted for this device, opened with Face ID, Touch ID or the passcode (`key unprotect NAME` writes it back); `key paste NAME` saves the key on the clipboard; `key fetch [user@]host:path [name]` copies one from a server
+- `ssh-keygen -t ed25519|ecdsa [-f file] [-N passphrase] [-C comment]` — a new key pair in `~/.ssh`; `ssh-keygen -R host` forgets a host's key in `~/.ssh/known_hosts`
+- `ssh-copy-id [-i key] [-p port] [user@]host` — your public key into the server's `authorized_keys`, so the next login asks for no password
+- `config` — the settings screen: servers (`~/.ssh/config`), keys, the font, the theme, the start screen. It writes `~/.config/fosforo/settings.filo`; `~/.config/fosforo/init.filo` (`edt` it) runs after and can set anything over it
+
 ## Not here
 
 `chmod`, `chown`, `chgrp`, `ln`, `kill`, `ps`, `mkfifo`, `nohup`, `nice`, `renice`, `crontab`, `at` and `stty` are POSIX's, but this shell cannot do what they do: each says so and fails (`$?` is 1).
