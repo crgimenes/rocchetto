@@ -1,6 +1,6 @@
 # rocchetto
 
-rocchetto, a POSIX shell with its utilities written in Filo. Here in the pager, Space and `b` turn the page, `j` and `k` move a line, `g` and `G` go to the start and the end, `/text` looks for text (`n` and `N` the next one and the one before), and `q` leaves. `help | grep word` works too.
+rocchetto, a POSIX shell with its utilities written in Filo. Here in the pager, Space and `b` turn the page, `j` and `k` move a line, `g` and `G` go to the start and the end, `/text` looks for text (`n` and `N` the next one and the one before), and `q` leaves. `help | grep word` works too. Files are written with `edt`, the system's editor (below, under Your home).
 
 ## Files and directories
 
@@ -43,7 +43,7 @@ The shell opens at your home, `~`, and it is yours to fill; the rest of the tree
 
 - `upload [dir]` — put files of yours in your home, where the host has a way in (in a browser a picker opens, or drop them on the page); they go where you are, or to `~/uploads`
 - `download <file>` — a file of yours (or the tree's) to your machine
-- `edt [file]` — the editor, named after DEC's: `Esc` then the orange letter is its GOLD key; `^S` saves in your home, `^Q` leaves, `^L` shows the text alone, `Esc X` shows the bytes in hex; with no file the first save asks for a name
+- `edt [file]` — the system's text editor, the one to write any file with (notes, scripts, `.red` warriors), named after DEC's: `Esc` then the orange letter is its GOLD key; `^S` saves in your home, `^Q` leaves, `^L` shows the text alone, `Esc X` shows the bytes in hex; with no file the first save asks for a name
 - `home` — what the host keeps of your home; `home export` downloads it as one file, `home import <file>` restores one you uploaded
 - `pbcopy [text]`, `pbpaste` — the machine's clipboard: `echo hi | pbcopy`, `pbpaste | wc`; in Filo, `(pbcopy "hi")` and `(pbpaste)`. Only where the host has one (the fosforo app)
 
