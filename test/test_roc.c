@@ -197,20 +197,20 @@ static void test_shell_starts_at_home(void) {
     send(m, "s\r");
     const char *o = drain(m);
     CHECK(strcmp(m->cwd, "/home/guest") == 0);
-    CHECK(strstr(o, "\x1b[34m~\x1b[0m$ ") != NULL); /* spelled ~ */
+    CHECK(strstr(o, "\x1b[1;34m~\x1b[0m$ ") != NULL); /* spelled ~ */
     send(m, "pwd\r");
     o = drain(m);
     CHECK(strstr(o, "\r\n/home/guest\r\n") != NULL);
     send(m, "mkdir w\r");
     send(m, "cd w\r");
     o = drain(m);
-    CHECK(strstr(o, "\x1b[34m~/w\x1b[0m$ ") != NULL);
+    CHECK(strstr(o, "\x1b[1;34m~/w\x1b[0m$ ") != NULL);
     send(m, "cd /pub\r");
     o = drain(m);
-    CHECK(strstr(o, "\x1b[34m/pub\x1b[0m$ ") != NULL);
+    CHECK(strstr(o, "\x1b[1;34m/pub\x1b[0m$ ") != NULL);
     send(m, "cd\r"); /* bare cd goes home, as everywhere */
     o = drain(m);
-    CHECK(strstr(o, "\x1b[34m~\x1b[0m$ ") != NULL && strcmp(m->cwd, "/home/guest") == 0);
+    CHECK(strstr(o, "\x1b[1;34m~\x1b[0m$ ") != NULL && strcmp(m->cwd, "/home/guest") == 0);
 }
 
 /* A terminal app's shell (ROC_F_PROMPT): the prompt at once, at home, no
@@ -229,7 +229,7 @@ static void test_prompt_flag(void) {
     roc_feed(&M, h.req_id, (const uint8_t *)test_index, strlen(test_index));
     roc_feed_eof(&M, h.req_id);
     const char *o = drain(&M);
-    CHECK(strstr(o, "\x1b[34m~\x1b[0m$ ") != NULL);
+    CHECK(strstr(o, "\x1b[1;34m~\x1b[0m$ ") != NULL);
     CHECK(strcmp(M.cwd, "/home/guest") == 0);
     CHECK(strstr(o, "Your choice") == NULL);
     CHECK(strstr(o, "entries indexed") == NULL && strstr(o, "shell.test") == NULL);

@@ -139,7 +139,7 @@ void roc_prompt(roc *m) {
         term_puts(&m->t, "@");
         term_puts(&m->t, m->host.host_name);
     }
-    term_puts(&m->t, "\x1b[0m:\x1b[34m");
+    term_puts(&m->t, "\x1b[0m:\x1b[1;34m"); /* bold: the bright blue, readable on black */
     char shown[VFS_PATH_MAX];
     term_puts(&m->t, prompt_cwd(m, shown, sizeof(shown)));
     term_puts(&m->t, "\x1b[0m$ ");
