@@ -7505,6 +7505,28 @@ static void test_keyin_function_keys(void) {
     CHECK(FT_KEY_BASE(decoded[4]) == FT_KEY_F1 + 1U);
 }
 
+/* A terminal's answers (colour queries, cursor reports) reach the prompt as
+   input nobody asked for: swallowed, never typed into the line. One cut off
+   mid-string ends at the ESC timeout and the next key is a key again. */
+static void test_terminal_replies_never_reach_the_line(void) {
+    mock_host h;
+    roc *m = boot(&h);
+    send(m, "\x1b]11;rgb:0a0a/0a0a/0a0a\x1b\\"); /* OSC, ST-terminated */
+    send(m, "\x1b]10;rgb:ffff/ffff/ffff\x07");   /* OSC, BEL-terminated */
+    send(m, "\x1b[24;80R");                      /* DSR cursor report */
+    send(m, "pwd\r");
+    const char *o = drain(m);
+    CHECK(strstr(o, "/\r\n") != NULL);
+    CHECK(strstr(o, "rgb") == NULL && strstr(o, "80R") == NULL);
+    send(m, "\x1b]11;truncat");
+    roc_tick(m, ROC_ESC_TIMEOUT_MS);
+    drain(m);
+    send(m, "pwd\r");
+    o = drain(m);
+    CHECK(strstr(o, "/\r\n") != NULL);
+    CHECK(strstr(o, "truncat") == NULL);
+}
+
 /* Registering a builtin in a full table fails, and the shell ignores the
    result: a builtin would go missing without a word (Core War's did, once,
    when the hex view's arrived). The screen context keeps room to spare. */
@@ -8472,6 +8494,7 @@ static void roc_tests(void) {
     RUN(test_md_pager_hangs_lists);
     RUN(test_builtin_table_has_room);
     RUN(test_keyin_function_keys);
+    RUN(test_terminal_replies_never_reach_the_line);
     RUN(test_screen_errors_say_where);
     RUN(test_every_key_is_the_programs);
     RUN(test_commands_start_fresh);
