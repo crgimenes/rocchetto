@@ -440,6 +440,10 @@ static int print_mode(roc *m, content *c) {
         print_row_colours(cv, y);
     }
     printf("caret %d,%d\n", (int)m->scr.caret_row, (int)m->scr.caret_col);
+    if (screen_error(m)[0] != '\0') {
+        printf("screen error: %s\n", screen_error(m));
+        return 1;
+    }
     return 0;
 }
 
