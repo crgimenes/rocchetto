@@ -51,7 +51,12 @@ static void term_size(uint16_t *cols, uint16_t *rows) {
     }
 }
 
+static int printing = 0; /* -p: nothing of the terminal's reaches stdout */
+
 static void out(const char *s) {
+    if (printing) {
+        return;
+    }
     ssize_t w = write(STDOUT_FILENO, s, strlen(s));
     (void)w;
 }
@@ -76,6 +81,9 @@ static void drain(roc *m) {
     uint8_t buf[TERM_OUT_CAP];
     size_t n = term_out_read(&m->t, buf, sizeof(buf));
     size_t off = 0;
+    if (printing) {
+        return;
+    }
     while (off < n) {
         ssize_t w = write(STDOUT_FILENO, buf + off, n - off);
         if (w <= 0) {
@@ -316,6 +324,125 @@ static void remember_screen(roc *m) {
     }
 }
 
+/* ---- -p: the screen as text, for a check that has no terminal ---- */
+
+/* One row as text. A cell with no rune is the right half of a wide one,
+   unless nothing was ever drawn there: then it is a blank. */
+static void print_row(const canvas *c, uint16_t y) {
+    char line[TERM_COLS_MAX * 4 + 1];
+    size_t n = 0;
+    bool half = false;
+    for (uint16_t x = 0; x < c->cols; x++) {
+        uint32_t cp = c->cells[y][x].cp;
+        if (cp == 0) {
+            if (!half) {
+                line[n++] = ' ';
+            }
+            half = false;
+            continue;
+        }
+        size_t k = utf8_encode((uint8_t *)line + n, cp);
+        half = cv_text_width((cv_text){(const uint8_t *)line + n, k}) == 2;
+        n += k;
+    }
+    while (n > 0 && line[n - 1] == ' ') {
+        n--;
+    }
+    line[n] = '\0';
+    printf("%s\n", line);
+}
+
+static bool cell_plain(cv_cell cell) {
+    return cell.fg == CV_COLOR_DEFAULT && cell.bg == CV_COLOR_DEFAULT && cell.attr == 0;
+}
+
+static bool cell_same_look(cv_cell a, cv_cell b) {
+    return a.fg == b.fg && a.bg == b.bg && a.attr == b.attr;
+}
+
+/* The colours of one row as runs: "3: 2-7 fg214 bold, 9-30 fg0 bg214".
+   Only the cells that carry something; a plain row prints nothing. */
+static void print_row_colours(const canvas *c, uint16_t y) {
+    uint16_t x = 0;
+    bool any = false;
+    while (x < c->cols) {
+        cv_cell cell = c->cells[y][x];
+        if (cell_plain(cell)) {
+            x++;
+            continue;
+        }
+        uint16_t end = x;
+        while (end < c->cols && cell_same_look(c->cells[y][end], cell)) {
+            end++;
+        }
+        if (!any) {
+            printf("%2d:", y);
+        }
+        printf("%s %d-%d", any ? "," : "", x, end - 1);
+        if (cell.fg != CV_COLOR_DEFAULT) {
+            printf(" fg%d", (int)cell.fg);
+        }
+        if (cell.bg != CV_COLOR_DEFAULT) {
+            printf(" bg%d", (int)cell.bg);
+        }
+        if (cell.attr & CV_A_BOLD) {
+            printf(" bold");
+        }
+        if (cell.attr & CV_A_DIM) {
+            printf(" dim");
+        }
+        if (cell.attr & CV_A_REV) {
+            printf(" rev");
+        }
+        any = true;
+        x = end;
+    }
+    if (any) {
+        printf("\n");
+    }
+}
+
+/* The keys are stdin, as a terminal would send them; a 0 byte is a pause
+   the ESC timeout long, so a lone ESC before more keys is an ESC and a
+   screen's tick runs. At their end, what the screen shows. */
+static int print_mode(roc *m, content *c) {
+    uint8_t buf[1024];
+    for (;;) {
+        ssize_t n = read(STDIN_FILENO, buf, sizeof(buf));
+        if (n <= 0) {
+            break;
+        }
+        size_t from = 0;
+        for (size_t i = 0; i < (size_t)n; i++) {
+            if (buf[i] != 0) {
+                continue;
+            }
+            roc_input(m, buf + from, i - from);
+            roc_tick(m, ROC_ESC_TIMEOUT_MS);
+            from = i + 1;
+        }
+        roc_input(m, buf + from, (size_t)n - from);
+        if (c->pending) {
+            serve(m, c);
+        }
+    }
+    roc_tick(m, ROC_ESC_TIMEOUT_MS);
+    if (problem_text[0] != '\0') {
+        printf("screen did not load\n%s\n", problem_text);
+        return 1;
+    }
+    const canvas *cv = &m->cmp.target;
+    for (uint16_t y = 0; y < cv->rows; y++) {
+        print_row(cv, y);
+    }
+    printf("--\n");
+    for (uint16_t y = 0; y < cv->rows; y++) {
+        print_row_colours(cv, y);
+    }
+    printf("caret %d,%d\n", (int)m->scr.caret_row, (int)m->scr.caret_col);
+    return 0;
+}
+
 int main(int argc, char **argv) {
     static roc m;
     static content c;
@@ -324,24 +451,31 @@ int main(int argc, char **argv) {
     snprintf(c.root, sizeof(c.root), "%s", ".");
 
     int opt = 0;
-    while ((opt = getopt(argc, argv, "r:s:h")) != -1) {
+    while ((opt = getopt(argc, argv, "r:s:ph")) != -1) {
         if (opt == 'r') {
             snprintf(c.root, sizeof(c.root), "%s", optarg);
         } else if (opt == 's') {
             start = optarg;
+        } else if (opt == 'p') {
+            printing = 1;
         } else {
-            printf("usage: compose [-r content-root] [-s screen] [screens-dir]\n"
+            printf("usage: compose [-r content-root] [-s screen] [-p] [screens-dir]\n"
                    "Draws the board's screens straight from a directory and\n"
                    "redraws them as they are saved. Same runtime the BBS runs.\n\n"
                    "  -r content-root  where mshindex.tsv and the articles are,\n"
                    "                   so the file areas list something real\n"
                    "                   (a Hugo output tree; default '.')\n"
                    "  -s screen        which screen to open (default 'main')\n"
+                   "  -p               print: the keys come from stdin (a 0 byte\n"
+                   "                   is a pause), and at their end the screen\n"
+                   "                   is printed as text, then its colours as\n"
+                   "                   runs, then the caret; no terminal needed\n"
                    "  screens-dir      the tree of screens (default 'screens')\n\n"
                    "Keys go to the screen, so the board is navigable. A screen\n"
                    "that fails to load takes the terminal and names the reason.\n"
                    "ROC_HOST_NAME names the board in the prompt.\n"
-                   "Example: compose -r ../site/public screens\n");
+                   "Example: compose -r ../site/public screens\n"
+                   "         printf 'f\\0\\033' | compose -p -s main screens\n");
             return opt == 'h' ? 0 : 2;
         }
     }
@@ -350,7 +484,7 @@ int main(int argc, char **argv) {
     }
     snprintf(T.root, sizeof(T.root), "%s", dir);
 
-    int tty = isatty(STDIN_FILENO);
+    int tty = !printing && isatty(STDIN_FILENO);
     if (tty) {
         if (tcgetattr(STDIN_FILENO, &saved_termios) == 0) {
             termios_saved = 1;
@@ -384,13 +518,18 @@ int main(int argc, char **argv) {
     if (c.pending) {
         serve(&m, &c); /* the index, so the areas have entries */
     }
-    /* the shell opens on "main" by itself once the index is in, so only a
-       different screen needs asking for */
+    /* a layer's shell opens on its home by itself once the index is in, so
+       only a different screen needs asking for; the plain shell has no home
+       and opens on the prompt, so here every screen does */
     snprintf(shown_name, sizeof(shown_name), "%s", start);
-    if (strcmp(start, "main") != 0 || screen_error(&m)[0] != '\0' || T.problem[0] != '\0') {
+    if (roc_layer_spec.home == NULL || strcmp(start, roc_layer_spec.home) != 0 ||
+        screen_error(&m)[0] != '\0' || T.problem[0] != '\0') {
         show_screen(&m);
     } else {
         drain(&m);
+    }
+    if (printing) {
+        return print_mode(&m, &c);
     }
 
     uint32_t since_watch = 0;
