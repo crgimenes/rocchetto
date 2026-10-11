@@ -258,6 +258,7 @@ static void *scratch_cb(void *ctx, size_t need) {
    the origin for the pager's links. */
 static char site_name[128];
 static char site_base[256];
+static char site_user[ROC_USER_MAX]; /* who the page already knows is here */
 
 static void site_from(uint32_t idlen) {
     site_name[0] = '\0';
@@ -274,10 +275,22 @@ static void site_from(uint32_t idlen) {
     }
     i++;
     k = 0;
-    while (i < n && k + 1 < sizeof(site_base)) {
+    while (i < n && iobuf[i] != '\n' && k + 1 < sizeof(site_base)) {
         site_base[k++] = (char)iobuf[i++];
     }
     site_base[k] = '\0';
+    /* an optional third line: the user's name, when the page learned it
+       before booting (a session that outlived the tab) */
+    while (i < n && iobuf[i] != '\n') {
+        i++;
+    }
+    i++;
+    k = 0;
+    site_user[0] = '\0';
+    while (i < n && iobuf[i] != '\n' && k + 1 < sizeof(site_user)) {
+        site_user[k++] = (char)iobuf[i++];
+    }
+    site_user[k] = '\0';
 }
 
 WASM_EXPORT("roc_w_init")
@@ -285,6 +298,7 @@ void roc_w_init(uint32_t cols, uint32_t rows, uint32_t flags, uint32_t idlen) {
     site_from(idlen);
     roc_host h = {
         .filo_extend = roc_host_extend,
+        .user = site_user[0] != '\0' ? site_user : "guest",
         .ctx = 0,
         .host_name = site_name,
         .site_base = site_base,
@@ -395,4 +409,15 @@ WASM_EXPORT("roc_w_upload_data") void roc_w_upload_data(uint32_t len) {
 
 WASM_EXPORT("roc_w_upload_end") void roc_w_upload_end(void) {
     roc_upload_end(&M);
+}
+
+/* A message for the layer, in iobuf. */
+WASM_EXPORT("roc_w_message") void roc_w_message(uint32_t len) {
+    if (roc_layer_spec.message == NULL) {
+        return;
+    }
+    if (len > sizeof(iobuf)) {
+        len = (uint32_t)sizeof(iobuf);
+    }
+    roc_layer_spec.message(&M, iobuf, len);
 }

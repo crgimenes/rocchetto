@@ -309,6 +309,9 @@ typedef struct {
     /* what came on the host's stream (stream_open) */
     void (*stream_data)(roc *m, const uint8_t *data, size_t n);
     void (*stream_event)(roc *m, uint32_t event);
+    /* a message from the host to the layer, in a form the two agree on (the
+       page answering something the layer asked of it) */
+    void (*message)(roc *m, const uint8_t *data, size_t n);
 } roc_layer;
 
 extern const roc_layer roc_layer_spec;
@@ -701,7 +704,14 @@ void roc_line_repaint(roc *m);
 /* Who is at the keyboard from now on — a login, a logout: the prompt and
    USER follow, in this session and in every program it starts. The files
    stay where they are. */
+/* The user's name, for the prompt and the home. Once the session is up, a
+   new name moves the home with it: /home/guest becomes /home/<name>, files,
+   directories and the working directory included. */
 void roc_set_user(roc *m, const char *name);
+
+/* Renames path and, for a directory, everything under it, in the store
+   and the index alike. */
+void roc_rename_tree(roc *m, const char *from, const char *to, bool dir);
 
 /* A line the host has for the person, unasked (a message from someone
    else, a connection that dropped): over the app on top, or above the

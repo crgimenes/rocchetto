@@ -343,6 +343,36 @@ static int b_input_at(filo_ctx *ctx, const filo_value *a, uint32_t n, filo_value
     return FILO_OK;
 }
 
+/* (input-set TEXT): the field's text becomes TEXT, caret at the end: a form
+   moving its one field to the next value. Inside the input hook it also
+   stops the line from being cleared when the hook returns. */
+static int b_input_set(filo_ctx *ctx, const filo_value *a, uint32_t n, filo_value *out) {
+    cv_text text = {NULL, 0};
+    if (n != 1 || paint_arg_text(ctx, &a[0], &text) != FILO_OK) {
+        return n != 1 ? filo_fail(ctx, "input-set expects the text") : FILO_ERR;
+    }
+    screen_state *s = &roc_of(ctx)->scr;
+    field_clear(&s->in);
+    s->in.max = 0; /* the last paint's limit was another field's; the next paint sets this one's */
+    size_t i = 0;
+    while (i < text.len) {
+        uint8_t b = (uint8_t)text.ptr[i];
+        size_t more = b >= 0xF0 ? 3 : b >= 0xE0 ? 2 : b >= 0xC0 ? 1 : 0;
+        if (i + more >= text.len) {
+            break; /* a rune cut at the end: stop before it */
+        }
+        uint32_t cp = more == 0 ? b : b & (uint32_t)(0x3F >> more);
+        for (size_t k = 1; k <= more; k++) {
+            cp = (cp << 6) | ((uint8_t)text.ptr[i + k] & 0x3FU);
+        }
+        field_key(&s->in, cp);
+        i += more + 1;
+    }
+    s->in_seeded = true;
+    *out = filo_bool(true);
+    return FILO_OK;
+}
+
 /* The text as it stands. It lives in the shell, so a screen that wants to
    keep it says so by putting it in one of its own globals. */
 static int b_input_text(filo_ctx *ctx, const filo_value *a, uint32_t n, filo_value *out) {
@@ -351,7 +381,14 @@ static int b_input_text(filo_ctx *ctx, const filo_value *a, uint32_t n, filo_val
         return filo_fail(ctx, "input-text takes no arguments");
     }
     const screen_state *s = &roc_of(ctx)->scr;
-    *out = filo_string(s->in.buf, (uint32_t)s->in.len);
+    /* a copy: the field goes on changing under a value that pointed into it
+       (a form keeping the text of one field while the next is typed) */
+    uint8_t *copy = filo_alloc(ctx, s->in.len > 0 ? s->in.len : 1);
+    if (copy == NULL) {
+        return filo_fail(ctx, "input-text: out of memory");
+    }
+    memcpy(copy, s->in.buf, s->in.len);
+    *out = filo_string(copy, (uint32_t)s->in.len);
     return FILO_OK;
 }
 
@@ -515,6 +552,7 @@ void screen_context_init(roc *m, filo_ctx *ctx, uint8_t *persistent, size_t plen
     }
     (void)filo_register_builtin(ctx, "input-at", b_input_at);
     (void)filo_register_builtin(ctx, "input-text", b_input_text);
+    (void)filo_register_builtin(ctx, "input-set", b_input_set);
     (void)filo_register_builtin(ctx, "entry-count", b_entry_count);
     (void)filo_register_builtin(ctx, "entry-at", b_entry_at);
     (void)filo_register_builtin(ctx, "cursor-at", b_cursor_at);
@@ -548,13 +586,10 @@ void screen_context_init(roc *m, filo_ctx *ctx, uint8_t *persistent, size_t plen
         home[0] = '\0';
     }
     (void)filo_set_global(ctx, "HOME", filo_cstring(home));
-    /* where the editor goes when it closes: the screen that opened it, or
-       nothing at all, which means back to whatever was under the shell */
-#if ROC_APP_EDIT
-    (void)filo_set_global(ctx, "RET", filo_cstring(m->ed.ret));
-#else
+    /* where the editor goes when it closes: the screen that opened it. Only
+       the editor's own screen learns it (screen_load_with), or the screen it
+       came back to would answer its done with itself. */
     (void)filo_set_global(ctx, "RET", filo_cstring(""));
-#endif
     (void)filo_set_global(ctx, "UPTIME", filo_num(uptime_secs(m)));
     /* whether this paint starts from blank cells: always, unless the screen
        keeps its canvas — then only when it has to */
@@ -844,15 +879,29 @@ bool screen_load_with(roc *m, const char *name, const char *arg) {
         return fail_here(m, "the screen name is too long");
     }
     bool quiet = s->quiet_load;
-    char back[SCR_NAME_MAX];
-    strcpy(back, s->name);
-    if (strcmp(back, name) == 0 || strcmp(s->back, name) == 0) {
-        back[0] = '\0'; /* reloading, or stepping back: no trail to keep */
+    /* the trail: a reload keeps it, stepping back shortens it, going on
+       lengthens it by the screen being left */
+    if (strcmp(s->name, name) != 0) {
+        if (s->ntrail > 0 && strcmp(s->trail[s->ntrail - 1], name) == 0) {
+            s->ntrail--;
+        } else if (s->name[0] != '\0') {
+            if (s->ntrail == SCR_TRAIL) {
+                memmove(s->trail[0], s->trail[1], sizeof(s->trail) - sizeof(s->trail[0]));
+                s->ntrail--;
+            }
+            strcpy(s->trail[s->ntrail], s->name);
+            s->ntrail++;
+        }
     }
     screen_reset(m);
     s->quiet_load = quiet;
     strcpy(s->name, name);
-    strcpy(s->back, back);
+    strcpy(s->back, s->ntrail > 0 ? s->trail[s->ntrail - 1] : "");
+#if ROC_APP_EDIT
+    if (strcmp(name, m->ed.app) == 0) {
+        (void)filo_set_global(&s->ctx, "RET", filo_cstring(m->ed.ret));
+    }
+#endif
     (void)filo_set_global(&s->ctx, "ARG", filo_cstring(arg));
     (void)filo_set_global(&s->ctx, "BACK", filo_cstring(s->back));
     if (!s->quiet_load) {
@@ -1120,6 +1169,15 @@ static settle_result settle(roc *m) {
         if (!screen_load_with(m, next, arg != NULL ? arg : "")) {
             return SETTLE_FAIL;
         }
+        /* a screen whose init sends the visitor on (a door that is not for
+           them) is followed at once, a few hops at most */
+        static int hops;
+        if (s->pending[0] != '\0' && hops < 4) {
+            hops++;
+            settle_result r = settle(m);
+            hops--;
+            return r == SETTLE_NONE ? SETTLE_SCREEN : r;
+        }
         return SETTLE_SCREEN;
     }
     /* with effects the new screen is built but not sent: the show goes from
@@ -1155,10 +1213,14 @@ bool screen_key(roc *m, uint32_t cp) {
     screen_state *s = &m->scr;
     if (field_takes(&s->in, cp)) {
         if (cp == '\r' || cp == '\n') {
+            s->in_seeded = false;
             if (!run_hook(m, SCR_HOOK_INPUT)) {
                 return false;
             }
-            field_clear(&s->in);
+            if (!s->in_seeded) {
+                field_clear(&s->in);
+            }
+            s->in_seeded = false;
         } else {
             field_key(&s->in, cp);
         }
@@ -1280,8 +1342,10 @@ bool screen_is_top(const roc *m) {
 
 void screen_enter(roc *m, const char *name) {
     m->scr.name[0] = '\0'; /* from outside the shell: nothing behind it */
+    m->scr.ntrail = 0;
     roc_app_enter(m, &screen_app);
     (void)screen_load(m, name);
+    (void)settle(m); /* an init may send the visitor elsewhere */
 }
 
 const char *screen_error(const roc *m) {

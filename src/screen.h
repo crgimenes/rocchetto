@@ -35,6 +35,7 @@ enum {
     SCR_STEPS_INIT = 200000, /* once per load: an init may build its data (news sorts the areas) */
     SCR_ERROR_MAX = 192,
     SCR_NAME_MAX = 32,
+    SCR_TRAIL = 8,       /* screens remembered on the way in */
     SCR_ENTRY_MAX = 16,  /* a hook's entry: "draw", "input" */
     SCR_INPUT_MAX = 128, /* bytes a field may hold */
     SCR_FX_MAX = 4,      /* effects a move between screens may chain */
@@ -89,6 +90,11 @@ typedef struct {
        reached from the main screen and a games list reached by backing
        out of a game both leave to the front screen. */
     char back[SCR_NAME_MAX];
+    /* the screens that led here, nearest last: back is the nearest. A
+       round trip (a door over a screen, and back) must not lose the way
+       on from the screen beneath. */
+    char trail[SCR_TRAIL][SCR_NAME_MAX];
+    uint8_t ntrail;
     char pending[VFS_PATH_MAX];       /* what exec asked for, "name:arg" */
     char fx[SCR_FX_MAX][SCR_FX_NAME]; /* the effects it asked to play on the way */
     size_t nfx;
@@ -96,6 +102,7 @@ typedef struct {
     /* The field the draw hook placed, if it placed one. The shell owns the
        text: a script reads it with input-text and never has to keep it. */
     field in;
+    bool in_seeded;  /* input-set ran during the input hook: keep its text */
     bool has_cursor; /* cursor-at: the caret without a field, an editor's */
     /* what the terminal was last told about the cursor. An app over the
        screen paints as it likes, so after one closes this says nothing

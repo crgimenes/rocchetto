@@ -1795,7 +1795,25 @@ static void set_user(roc *m, const char *name) {
 }
 
 void roc_set_user(roc *m, const char *name) {
+    char from[VFS_PATH_MAX];
+    char to[VFS_PATH_MAX];
+    bool had = roc_home_path(m, "", from, sizeof(from)) && roc_lookup(m, from) != NULL;
     set_user(m, name);
+    if (!had || !roc_home_path(m, "", to, sizeof(to)) || strcmp(from, to) == 0) {
+        return;
+    }
+    if (roc_lookup(m, to) != NULL) {
+        return; /* a home already there is not overwritten */
+    }
+    roc_rename_tree(m, from, to, true);
+    size_t fl = strlen(from);
+    if (strncmp(m->cwd, from, fl) == 0 && (m->cwd[fl] == '\0' || m->cwd[fl] == '/') &&
+        strlen(to) + strlen(m->cwd + fl) < sizeof(m->cwd)) {
+        char cwd[VFS_PATH_MAX];
+        strcpy(cwd, to);
+        strcat(cwd, m->cwd + fl);
+        strcpy(m->cwd, cwd);
+    }
 }
 
 void roc_notice(roc *m, const char *text) {

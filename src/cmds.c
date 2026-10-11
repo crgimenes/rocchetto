@@ -42,16 +42,24 @@ const char *roc_command_name(size_t i) {
     return i < NCOMMANDS ? commands[i] : roc_layer_spec.commands[i - NCOMMANDS];
 }
 
+/* The home is named after the user, except that every guest ("guest#1a2b"
+   on the board) shares /home/guest: a "#" in a path is a comment to the
+   shell, and a guest's home is this browser's anyway. */
+static const char *home_user(const roc *m) {
+    return strncmp(m->user, "guest", 5) == 0 ? "guest" : m->user;
+}
+
 bool roc_home_path(const roc *m, const char *file, char *out, size_t cap) {
-    size_t n = strlen("/home/") + strlen(m->user) + (file[0] != '\0' ? 1 + strlen(file) : 0);
+    const char *user = home_user(m);
+    size_t n = strlen("/home/") + strlen(user) + (file[0] != '\0' ? 1 + strlen(file) : 0);
     if (n >= cap) {
         return false;
     }
     memcpy(out, "/home/", 6);
-    memcpy(out + 6, m->user, strlen(m->user) + 1);
+    memcpy(out + 6, user, strlen(user) + 1);
     if (file[0] != '\0') {
-        out[6 + strlen(m->user)] = '/';
-        memcpy(out + 7 + strlen(m->user), file, strlen(file) + 1);
+        out[6 + strlen(user)] = '/';
+        memcpy(out + 7 + strlen(user), file, strlen(file) + 1);
     }
     return true;
 }
@@ -1624,7 +1632,7 @@ static bool prefixed(const char *path, const char *dir, size_t dlen) {
 
 /* Renames path and, for a directory, everything under it, in both the
    store and the index. */
-static void rename_tree(roc *m, const char *from, const char *to, bool dir) {
+void roc_rename_tree(roc *m, const char *from, const char *to, bool dir) {
     size_t flen = strlen(from);
     size_t tlen = strlen(to);
     size_t i = 0;
@@ -1723,7 +1731,7 @@ bool roc_cmd_mv(roc *m, const char *src, const char *dst) {
         roc_err(m, "mv", src, "Input/output error");
         return false;
     }
-    rename_tree(m, from, to, dir);
+    roc_rename_tree(m, from, to, dir);
     roc_home_changed(m);
     return true;
 }
