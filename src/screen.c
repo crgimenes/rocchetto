@@ -1356,12 +1356,16 @@ bool screen_is_top(const roc *m) {
     return term_app_top(&m->t) == &screen_app;
 }
 
-void screen_enter(roc *m, const char *name) {
+void screen_enter_with(roc *m, const char *name, const char *arg) {
     m->scr.name[0] = '\0'; /* from outside the shell: nothing behind it */
     m->scr.ntrail = 0;
     roc_app_enter(m, &screen_app);
-    (void)screen_load(m, name);
+    (void)screen_load_with(m, name, arg);
     (void)settle(m); /* an init may send the visitor elsewhere */
+}
+
+void screen_enter(roc *m, const char *name) {
+    screen_enter_with(m, name, "");
 }
 
 const char *screen_error(const roc *m) {

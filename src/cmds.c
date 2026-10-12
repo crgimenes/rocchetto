@@ -3503,10 +3503,17 @@ static bool idle(const roc *m) {
     if (m->t.napps > 0 || m->sc.repl) {
         return false;
     }
-    if (ed_active(m)) {
+    if (ed_active(m) || roc_layer_line_active(m)) {
         return false;
     }
     return true;
+}
+
+bool roc_layer_line_active(const roc *m) {
+    if (roc_layer_spec.line_active == NULL) {
+        return false;
+    }
+    return roc_layer_spec.line_active(m);
 }
 
 bool roc_list_waiting(const roc *m) {
@@ -5329,6 +5336,10 @@ void roc_exec(roc *m, char *line) {
        part of the line and an empty line is an empty line. */
     if (ed_active(m)) {
         ed_line(m, line);
+        return;
+    }
+    if (roc_layer_line_active(m)) {
+        roc_layer_spec.line(m, line);
         return;
     }
     /* the blanks around a line go, but not around one that continues

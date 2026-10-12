@@ -163,8 +163,10 @@ bool screen_compose(roc *m, const char *name);
 /* Puts the screen app on top of an already loaded screen. */
 void screen_attach(roc *m);
 
-/* Pushes the screen app and loads name into it. */
+/* Pushes the screen app and loads name into it; with an argument, as
+   (exec name arg) would hand it over in ARG. */
 void screen_enter(roc *m, const char *name);
+void screen_enter_with(roc *m, const char *name, const char *arg);
 
 /* True while a screen is the app on top: the editor loads itself in its
    place instead of stacking a second one over the same state. */

@@ -312,7 +312,16 @@ typedef struct {
     /* a message from the host to the layer, in a form the two agree on (the
        page answering something the layer asked of it) */
     void (*message)(roc *m, const uint8_t *data, size_t n);
+    /* a line program of the layer's own (a board's mail reader): while it
+       is active every typed line is its own, untrimmed, and it draws its own
+       prompt, as ed does */
+    bool (*line_active)(const roc *m);
+    void (*line)(roc *m, char *line);
+    const char *(*line_prompt)(const roc *m);
 } roc_layer;
+
+/* Whether the layer's line program has the typed line. */
+bool roc_layer_line_active(const roc *m);
 
 extern const roc_layer roc_layer_spec;
 

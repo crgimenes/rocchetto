@@ -88,6 +88,16 @@ bool roc_exited(const roc *m) {
     return m->exited;
 }
 
+/* The prompt of whatever program has the typed line: ed's, or the layer's
+   own; NULL when it is the shell's. */
+static const char *line_program_prompt(const roc *m) {
+    const char *p = ed_prompt(m);
+    if (p == NULL && roc_layer_line_active(m)) {
+        p = roc_layer_spec.line_prompt(m);
+    }
+    return p;
+}
+
 /* ---- prompt and line editing ---- */
 
 static const char *prompt_cwd(const roc *m, char *buf, size_t cap);
@@ -117,7 +127,7 @@ void roc_prompt(roc *m) {
             return; /* waiting again, or something else has the terminal */
         }
     }
-    const char *line_ed = ed_prompt(m);
+    const char *line_ed = line_program_prompt(m);
     if (line_ed != NULL) {
         term_puts(&m->t, line_ed);
         return;
@@ -206,7 +216,7 @@ static const char *prompt_cwd(const roc *m, char *buf, size_t cap) {
    REPL's, or the shell's, whose host is there only when the host names one.
    The cursor arithmetic of the line rests on it. */
 static size_t prompt_cols(const roc *m) {
-    const char *line_ed = ed_prompt(m);
+    const char *line_ed = line_program_prompt(m);
     if (line_ed != NULL) {
         return utf8_swidth(line_ed);
     }
