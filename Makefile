@@ -84,6 +84,13 @@ EMBED ?= $(shell printf '$(HASH)embed "%s"\n' '$(abspath $(ROC)/Makefile)' | \
 # The tree /lib/roc is: this repository's lib/ (the help, the Filo API) and
 # whatever roots a layer adds (its screens). The commands of /bin, as
 # source: compiled into bin/NAME and carried that way, never as the .filo.
+#
+# Without Core War the help leaves out its commands too: the tree is then a
+# copy of lib/ whose help has no mars, corewar or warriors in it.
+ifeq ($(APPS_COREWAR),0)
+TREE_ROOTS ?= build/lib-nocw
+TREE_MADE = build/lib-nocw.made
+endif
 TREE_ROOTS ?= $(ROC)/lib
 COMMAND_ROOTS ?= $(ROC)/commands
 SCREENS = $(shell find $(TREE_ROOTS) -type f 2>/dev/null | sort)
@@ -97,7 +104,7 @@ UNITS = build/units/.built
 # the shell itself, linked against the sources alone and with every app in,
 # so any build can carry them: one without an app refuses that app's screens
 # at load, as it would refuse their source.
-$(GEN_SRC): $(SCREENS) $(COMMANDS) $(ROC)/tools/embed.sh
+$(GEN_SRC): $(SCREENS) $(COMMANDS) $(ROC)/tools/embed.sh $(TREE_MADE) build/tree.flags
 	@mkdir -p build
 	sh $(ROC)/tools/embed.sh $(EMBED) $(TREE_ROOTS) $(COMMAND_ROOTS) > $@
 
@@ -153,7 +160,22 @@ endef
 $(foreach f,$(APP_FBBS),$(eval $(call app_copy,$(f))))
 
 # /bin holds the programs, not the sources they were compiled from.
-$(GEN): $(SCREENS) $(ROC)/tools/embed.sh $(UNITS) $(APPS_TREE)
+build/lib-nocw.made: $(shell find $(ROC)/lib -type f 2>/dev/null)
+	@rm -rf build/lib-nocw && mkdir -p build && cp -R $(ROC)/lib build/lib-nocw
+	sed -e '/^- `mars /d' -e '/^- `corewar /d' -e 's/, `\.red` warriors//' \
+		$(ROC)/lib/bin/roc_help.md > build/lib-nocw/bin/roc_help.md
+	@touch $@
+
+# the tree differs with Core War in or out: a switch redoes it, from an
+# empty build/apps (its copies of the other build would be carried too)
+build/tree.flags: FORCE
+	@mkdir -p build
+	@echo 'APPS_COREWAR=$(APPS_COREWAR)' > $@.tmp
+	@cmp -s $@.tmp $@ || { rm -rf build/apps; mv $@.tmp $@; }
+	@rm -f $@.tmp
+$(APPS_TREE): | build/tree.flags
+
+$(GEN): build/tree.flags $(SCREENS) $(ROC)/tools/embed.sh $(UNITS) $(APPS_TREE) $(TREE_MADE)
 	@mkdir -p build build/apps
 	sh $(ROC)/tools/embed.sh $(EMBED) $(TREE_ROOTS) build/units build/apps > $@
 
