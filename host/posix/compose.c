@@ -41,6 +41,8 @@ static void restore_termios(void) {
     }
 }
 
+/* The terminal's size, or with no terminal (-p) COLUMNS and LINES, so a
+   screen can be checked at any size. */
 static void term_size(uint16_t *cols, uint16_t *rows) {
     struct winsize ws;
     *cols = 80;
@@ -48,6 +50,13 @@ static void term_size(uint16_t *cols, uint16_t *rows) {
     if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0 && ws.ws_row > 0) {
         *cols = ws.ws_col;
         *rows = ws.ws_row;
+        return;
+    }
+    const char *c = getenv("COLUMNS");
+    const char *l = getenv("LINES");
+    if (c != NULL && atoi(c) > 0 && l != NULL && atoi(l) > 0) {
+        *cols = (uint16_t)atoi(c);
+        *rows = (uint16_t)atoi(l);
     }
 }
 
@@ -297,6 +306,9 @@ static void show_screen(roc *m) {
     if (T.problem[0] != '\0') {
         show_problem(T.problem);
         return;
+    }
+    if (!screen_is_top(m)) {
+        screen_attach(m); /* the plain shell sits at its prompt: the screens go over it */
     }
     if (!screen_load_with(m, shown_name, shown_arg)) {
         show_problem(screen_error(m));

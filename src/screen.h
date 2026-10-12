@@ -170,8 +170,10 @@ void screen_enter(roc *m, const char *name);
    place instead of stacking a second one over the same state. */
 bool screen_is_top(const roc *m);
 
-/* Places the field a draw hook asked for and puts the caret in it. */
-void scr_field_at(roc *m, int32_t row, int32_t col, int32_t width, uint32_t most, bool secret);
+/* Places the field a draw hook asked for (an area, with rows above one)
+   and puts the caret in it. */
+void scr_field_at(roc *m, int32_t row, int32_t col, int32_t width, int32_t rows, uint32_t most,
+                  bool secret);
 
 /* Runs the key hook, paints, and follows exec if the hook asked. */
 bool screen_key(roc *m, uint32_t cp);

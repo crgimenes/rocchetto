@@ -312,33 +312,39 @@ static int b_keep_canvas(filo_ctx *ctx, const filo_value *a, uint32_t n, filo_va
 
 /* Places the field the draw hook asked for and puts the caret in it. Both
    kinds of screen land here. */
-void scr_field_at(roc *m, int32_t row, int32_t col, int32_t width, uint32_t most, bool secret) {
+void scr_field_at(roc *m, int32_t row, int32_t col, int32_t width, int32_t rows, uint32_t most,
+                  bool secret) {
     screen_state *s = &m->scr;
-    field_draw(&s->in, &m->cmp.target, row, col, width, most, secret, &s->caret_row, &s->caret_col);
+    field_draw_area(&s->in, &m->cmp.target, row, col, width, rows, most, secret, &s->caret_row,
+                    &s->caret_col);
 }
 
+/* (input-at row col width max hide [rows]): the field, and with rows an
+   area of that many lines, the text broken at words. */
 static int b_input_at(filo_ctx *ctx, const filo_value *a, uint32_t n, filo_value *out) {
-    if (n != 5) {
-        return filo_fail(ctx, "input-at expects a row, a column, a width, a maximum and "
-                              "whether to hide what is typed");
+    if (n != 5 && n != 6) {
+        return filo_fail(ctx, "input-at expects a row, a column, a width, a maximum, "
+                              "whether to hide what is typed, and the rows of an area");
     }
     int32_t row = 0;
     int32_t col = 0;
     int32_t width = 0;
     int32_t most = 0;
+    int32_t rows = 1;
     if (paint_arg_cell(ctx, &a[0], "row", &row) != FILO_OK ||
         paint_arg_cell(ctx, &a[1], "column", &col) != FILO_OK ||
         paint_arg_cell(ctx, &a[2], "width", &width) != FILO_OK ||
-        paint_arg_cell(ctx, &a[3], "maximum", &most) != FILO_OK) {
+        paint_arg_cell(ctx, &a[3], "maximum", &most) != FILO_OK ||
+        (n == 6 && paint_arg_cell(ctx, &a[5], "rows", &rows) != FILO_OK)) {
         return FILO_ERR;
     }
     if (a[4].kind != FILO_BOOL) {
         return filo_fail(ctx, "input-at expects #t or #f for hiding what is typed");
     }
-    if (width < 1) {
-        return filo_fail(ctx, "a field needs at least one column");
+    if (width < 1 || rows < 1) {
+        return filo_fail(ctx, "a field needs at least one column and one row");
     }
-    scr_field_at(roc_of(ctx), row, col, width, most > 0 ? (uint32_t)most : 0, a[4].u.b);
+    scr_field_at(roc_of(ctx), row, col, width, rows, most > 0 ? (uint32_t)most : 0, a[4].u.b);
     *out = filo_bool(true);
     return FILO_OK;
 }
