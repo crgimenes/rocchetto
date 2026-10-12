@@ -41,6 +41,20 @@ static void restore_termios(void) {
     }
 }
 
+/* A size from the environment: a whole number of cells, or 0. */
+static uint16_t env_size(const char *name) {
+    const char *v = getenv(name);
+    if (v == NULL) {
+        return 0;
+    }
+    char *end = NULL;
+    long n = strtol(v, &end, 10);
+    if (end == v || *end != '\0' || n <= 0 || n > UINT16_MAX) {
+        return 0;
+    }
+    return (uint16_t)n;
+}
+
 /* The terminal's size, or with no terminal (-p) COLUMNS and LINES, so a
    screen can be checked at any size. */
 static void term_size(uint16_t *cols, uint16_t *rows) {
@@ -52,11 +66,11 @@ static void term_size(uint16_t *cols, uint16_t *rows) {
         *rows = ws.ws_row;
         return;
     }
-    const char *c = getenv("COLUMNS");
-    const char *l = getenv("LINES");
-    if (c != NULL && atoi(c) > 0 && l != NULL && atoi(l) > 0) {
-        *cols = (uint16_t)atoi(c);
-        *rows = (uint16_t)atoi(l);
+    uint16_t c = env_size("COLUMNS");
+    uint16_t l = env_size("LINES");
+    if (c > 0 && l > 0) {
+        *cols = c;
+        *rows = l;
     }
 }
 
@@ -341,7 +355,7 @@ static void remember_screen(roc *m) {
 /* One row as text. A cell with no rune is the right half of a wide one,
    unless nothing was ever drawn there: then it is a blank. */
 static void print_row(const canvas *c, uint16_t y) {
-    char line[TERM_COLS_MAX * 4 + 1];
+    char line[(TERM_COLS_MAX * 4) + 1];
     size_t n = 0;
     bool half = false;
     for (uint16_t x = 0; x < c->cols; x++) {
@@ -365,11 +379,17 @@ static void print_row(const canvas *c, uint16_t y) {
 }
 
 static bool cell_plain(cv_cell cell) {
-    return cell.fg == CV_COLOR_DEFAULT && cell.bg == CV_COLOR_DEFAULT && cell.attr == 0;
+    if (cell.fg != CV_COLOR_DEFAULT || cell.bg != CV_COLOR_DEFAULT) {
+        return false;
+    }
+    return cell.attr == 0U;
 }
 
 static bool cell_same_look(cv_cell a, cv_cell b) {
-    return a.fg == b.fg && a.bg == b.bg && a.attr == b.attr;
+    if (a.fg != b.fg || a.bg != b.bg) {
+        return false;
+    }
+    return a.attr == b.attr;
 }
 
 /* The colours of one row as runs: "3: 2-7 fg214 bold, 9-30 fg0 bg214".
@@ -538,7 +558,7 @@ int main(int argc, char **argv) {
        only a different screen needs asking for; the plain shell has no home
        and opens on the prompt, so here every screen does */
     snprintf(shown_name, sizeof(shown_name), "%s", start);
-    if (roc_layer_spec.home == NULL || strcmp(start, roc_layer_spec.home) != 0 ||
+    if (printing || roc_layer_spec.home == NULL || strcmp(start, roc_layer_spec.home) != 0 ||
         screen_error(&m)[0] != '\0' || T.problem[0] != '\0') {
         show_screen(&m);
     } else {

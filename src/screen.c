@@ -363,13 +363,23 @@ static int b_input_set(filo_ctx *ctx, const filo_value *a, uint32_t n, filo_valu
     size_t i = 0;
     while (i < text.len) {
         uint8_t b = (uint8_t)text.ptr[i];
-        size_t more = b >= 0xF0 ? 3 : b >= 0xE0 ? 2 : b >= 0xC0 ? 1 : 0;
+        size_t more = 0;
+        if (b >= 0xF0U) {
+            more = 3;
+        } else if (b >= 0xE0U) {
+            more = 2;
+        } else if (b >= 0xC0U) {
+            more = 1;
+        }
         if (i + more >= text.len) {
             break; /* a rune cut at the end: stop before it */
         }
-        uint32_t cp = more == 0 ? b : b & (uint32_t)(0x3F >> more);
+        uint32_t cp = b;
+        if (more > 0) {
+            cp = b & (0x3FU >> more);
+        }
         for (size_t k = 1; k <= more; k++) {
-            cp = (cp << 6) | ((uint8_t)text.ptr[i + k] & 0x3FU);
+            cp = (cp << 6U) | ((uint32_t)(uint8_t)text.ptr[i + k] & 0x3FU);
         }
         field_key(&s->in, cp);
         i += more + 1;
@@ -1218,7 +1228,7 @@ static bool run_hook(roc *m, scr_hook_id id) {
 bool screen_key(roc *m, uint32_t cp) {
     screen_state *s = &m->scr;
     if (field_takes(&s->in, cp)) {
-        if (cp == '\r' || cp == '\n') {
+        if (field_submits(&s->in, cp, m->t.pasting)) {
             s->in_seeded = false;
             if (!run_hook(m, SCR_HOOK_INPUT)) {
                 return false;

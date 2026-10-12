@@ -1797,7 +1797,10 @@ static void set_user(roc *m, const char *name) {
 void roc_set_user(roc *m, const char *name) {
     char from[VFS_PATH_MAX];
     char to[VFS_PATH_MAX];
-    bool had = roc_home_path(m, "", from, sizeof(from)) && roc_lookup(m, from) != NULL;
+    bool had = false;
+    if (roc_home_path(m, "", from, sizeof(from)) && roc_lookup(m, from) != NULL) {
+        had = true;
+    }
     set_user(m, name);
     if (!had || !roc_home_path(m, "", to, sizeof(to)) || strcmp(from, to) == 0) {
         return;

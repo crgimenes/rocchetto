@@ -336,7 +336,7 @@ footprint: $(CORE) $(FILOSRC) $(GEN) $(HDRS) $(ROC)/tools/footprint.c
 # added next month cannot quietly break the small build. The user's files
 # stay tiny rather than absent — a device with a card mounts it instead.
 SMALL = -DFT_CFG_COLS_MAX=100 -DFT_CFG_ROWS_MAX=40 \
-	-DFT_CFG_OUT_CAP='(16*1024)' \
+	-DFT_CFG_OUT_CAP='(16*1024)' -DFT_CFG_FIELD_CAP=1024 \
 	-DROC_CFG_UFS_DATA_CAP='(32*1024)' -DROC_CFG_UFS_FILE_MAX='(16*1024)' \
 	-DROC_CFG_UFS_FILES_MAX=16 \
 	-DROC_CFG_VFS_ARENA_CAP='(64*1024)' -DROC_CFG_VFS_NODES_MAX=512 \
@@ -406,7 +406,7 @@ ESP32_DIR = $(ROC)/host/esp32
 # pipe or a > holds 2 KB, the pager and ed 4 KB, a typed command 128 bytes
 # (six rows of this screen). The clipboard is the full-screen editor's, which
 # is not in this build.
-ESP32_CFG = -DFT_CFG_COLS_MAX=20 -DFT_CFG_ROWS_MAX=8 -DFT_CFG_OUT_CAP=4096 \
+ESP32_CFG = -DFT_CFG_COLS_MAX=20 -DFT_CFG_ROWS_MAX=8 -DFT_CFG_OUT_CAP=4096 -DFT_CFG_FIELD_CAP=128 \
 	-DROC_CFG_UFS_DATA_CAP=8192 -DROC_CFG_UFS_FILE_MAX=4096 -DROC_CFG_UFS_FILES_MAX=6 \
 	-DROC_CFG_VFS_ARENA_CAP=12288 -DROC_CFG_VFS_NODES_MAX=96 \
 	-DFT_CFG_PAGER_TEXT_CAP=4096 -DFT_CFG_PAGER_LINES_MAX=128 \
