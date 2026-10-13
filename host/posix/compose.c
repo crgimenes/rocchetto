@@ -126,6 +126,7 @@ typedef struct {
     size_t used;
     uint8_t bytes[TREE_BYTES];
     char root[1024];
+    char kit[1024]; /* -k: its files join the root of the tree */
     char problem[256];
 } tree;
 
@@ -192,6 +193,9 @@ static void tree_load(tree *t) {
     t->stamp = 0;
     t->problem[0] = '\0';
     walk(t, t->root, "", WALK_DEPTH);
+    if (t->kit[0] != '\0') {
+        walk(t, t->kit, "", 0);
+    }
     if (t->nfiles == 0 && t->problem[0] == '\0') {
         snprintf(t->problem, sizeof(t->problem),
                  "no screens in '%s' - expected a directory holding main/init.filo", t->root);
@@ -487,20 +491,24 @@ int main(int argc, char **argv) {
     snprintf(c.root, sizeof(c.root), "%s", ".");
 
     int opt = 0;
-    while ((opt = getopt(argc, argv, "r:s:ph")) != -1) {
+    while ((opt = getopt(argc, argv, "r:k:s:ph")) != -1) {
         if (opt == 'r') {
             snprintf(c.root, sizeof(c.root), "%s", optarg);
+        } else if (opt == 'k') {
+            snprintf(T.kit, sizeof(T.kit), "%s", optarg);
         } else if (opt == 's') {
             start = optarg;
         } else if (opt == 'p') {
             printing = 1;
         } else {
-            printf("usage: compose [-r content-root] [-s screen] [-p] [screens-dir]\n"
+            printf("usage: compose [-r content-root] [-k kit-dir] [-s screen] [-p] [screens-dir]\n"
                    "Draws the board's screens straight from a directory and\n"
                    "redraws them as they are saved. Same runtime the BBS runs.\n\n"
                    "  -r content-root  where mshindex.tsv and the articles are,\n"
                    "                   so the file areas list something real\n"
                    "                   (a Hugo output tree; default '.')\n"
+                   "  -k kit-dir       a directory whose files join the root of\n"
+                   "                   the tree (filo-term's kit: kit.filo)\n"
                    "  -s screen        which screen to open (default 'main')\n"
                    "  -p               print: the keys come from stdin (a 0 byte\n"
                    "                   is a pause), and at their end the screen\n"
@@ -599,6 +607,9 @@ int main(int argc, char **argv) {
                 /* an unreadable root stamps -1 forever: reloading on that would
                    repaint the error over whatever the author is doing */
                 long long stamp = tree_stamp(T.root, WALK_DEPTH);
+                if (stamp >= 0 && T.kit[0] != '\0') {
+                    stamp += tree_stamp(T.kit, 0);
+                }
                 if (stamp >= 0 && stamp != T.stamp) {
                     remember_screen(&m);
                     tree_load(&T);

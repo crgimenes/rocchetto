@@ -520,9 +520,9 @@ static bool fail_filo(roc *m, const char *file) {
 }
 
 /* The file an entry was compiled from, for an error to name and for a
-   screen running from its source to be read from: the shell's common file
-   at the root of the tree, a screen's in its directory ("main/draw.filo"),
-   an app's by its own name ("draw.filo"). */
+   screen running from its source to be read from: the kit and the shell's
+   common file at the root of the tree, a screen's in its directory
+   ("main/draw.filo"), an app's by its own name ("draw.filo"). */
 static bool entry_file(const screen_state *s, const char *entry, char *dst, size_t cap) {
     char file[SCR_ENTRY_MAX + sizeof(".filo")];
     size_t n = strlen(entry);
@@ -531,7 +531,7 @@ static bool entry_file(const screen_state *s, const char *entry, char *dst, size
     }
     memcpy(file, entry, n);
     memcpy(file + n, ".filo", sizeof(".filo"));
-    if (s->app || strcmp(entry, "common") == 0) {
+    if (s->app || strcmp(entry, "kit") == 0 || strcmp(entry, "common") == 0) {
         if (strlen(file) + 1 > cap) {
             return false;
         }
@@ -800,13 +800,15 @@ static bool run_entry(roc *m, const char *entry, bool required) {
     return true;
 }
 
-/* A program, from its unit or its source: the shell's common file, then its
-   init, and from there the globals are closed — so a hook that names
-   something the init never made fails to compile, right now. The hooks are
-   the entries named for them, whichever it has; draw it must have. */
+/* A program, from its unit or its source: the kit (the widgets shared
+   with other layers), the shell's common file, then its init, and from
+   there the globals are closed — so a hook that names something the init
+   never made fails to compile, right now. The hooks are the entries named
+   for them, whichever it has; draw it must have. */
 static bool start(roc *m) {
     screen_state *s = &m->scr;
-    if (!run_entry(m, "common", false) || !run_entry(m, "init", true)) {
+    if (!run_entry(m, "kit", false) || !run_entry(m, "common", false) ||
+        !run_entry(m, "init", true)) {
         return false;
     }
     filo_seal_globals(&s->ctx);
@@ -1018,7 +1020,7 @@ static bool is_hook_file(const char *path, const char *name) {
     if (strchr(file, '/') != NULL || len <= 5 || strcmp(file + len - 5, ".filo") != 0) {
         return false;
     }
-    if (strcmp(file, "common.filo") == 0) {
+    if (strcmp(file, "kit.filo") == 0 || strcmp(file, "common.filo") == 0) {
         return false;
     }
     return strcmp(file, "init.filo") != 0;
@@ -1030,7 +1032,7 @@ bool screen_build(roc *m, const char *name, uint8_t *dst, size_t cap, size_t *le
     screen_reset(m);
     u.n = 0;
     char path[TREE_PATH_MAX];
-    if (!unit_add(m, &u, "common.filo", false, true)) {
+    if (!unit_add(m, &u, "kit.filo", false, true) || !unit_add(m, &u, "common.filo", false, true)) {
         return false;
     }
     if (!path_join(path, sizeof(path), name, "init.filo") || !unit_add(m, &u, path, true, true)) {

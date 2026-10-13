@@ -283,9 +283,11 @@ wasm: $(CORE) $(FILOSRC) $(GEN) $(HDRS) $(ROC)/host/wasm/wasm.c $(ROC)/host/wasm
 # The wasm the site serves, run under Node with the page's imports faked
 # (test/wasm/harness.mjs): the C tests do not show the freestanding build
 # links, nor that the glue's contract holds.
+# A layer whose EXTEND_SRC imports more of the page names a module in
+# WASM_IMPORTS; its exports join the faked env.
 WASM_TESTS = $(ROC)/test/wasm/test_wasm.mjs $(ROC)/test/wasm/test_store.mjs
-wasm-test: wasm $(ROC)/test/wasm/harness.mjs $(WASM_TESTS) $(ROC)/web/store.mjs $(ROC)/test/fixtures/utilities.txt $(ROC)/test/fixtures/oracle.mjs
-	for t in $(WASM_TESTS); do ROC_WASM=$(abspath build/roc.wasm) node $$t || exit 1; done
+wasm-test: wasm $(ROC)/test/wasm/harness.mjs $(WASM_TESTS) $(WASM_IMPORTS) $(ROC)/web/store.mjs $(ROC)/test/fixtures/utilities.txt $(ROC)/test/fixtures/oracle.mjs
+	for t in $(WASM_TESTS); do ROC_WASM=$(abspath build/roc.wasm) ROC_WASM_IMPORTS=$(if $(WASM_IMPORTS),$(abspath $(WASM_IMPORTS))) node $$t || exit 1; done
 
 # A run is far more expensive now that a boot loads and runs a screen, so
 # the bound is time, not iterations: the gate has to stay predictable.

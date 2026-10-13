@@ -140,20 +140,20 @@ void screen_reset(roc *m);
 void screen_context_init(roc *m, filo_ctx *ctx, uint8_t *persistent, size_t plen, uint8_t *run,
                          size_t rlen);
 
-/* Loads a screen from the tree: the shell's common file, then the screen's
-   own, then its init, which is where it declares its state and names its
-   hooks. The globals are sealed when init returns, so the hooks compile
-   against a closed set and a name typed wrong fails here rather than at the
-   first keystroke. Then it paints. */
+/* Loads a screen from the tree: the kit and the shell's common file, each
+   optional, then the screen's own, then its init, which is where it
+   declares its state and names its hooks. The globals are sealed when init
+   returns, so the hooks compile against a closed set and a name typed
+   wrong fails here rather than at the first keystroke. Then it paints. */
 bool screen_load(roc *m, const char *name);
 bool screen_load_with(roc *m, const char *name, const char *arg);
 
-/* Compiles a screen into the unit the bundle carries for it: the shell's
-   common file, the screen's own, its init, and every other .filo of its
-   directory as the hooks init may name — each an entry named by its path in
-   the tree. It loads the screen as screen_load does — init run, then the
-   globals sealed before the hooks compile — so a name typed wrong fails the
-   build. */
+/* Compiles a screen into the unit the bundle carries for it: the kit and
+   the shell's common file, the screen's own, its init, and every other
+   .filo of its directory as the hooks init may name — each an entry named
+   by its path in the tree. It loads the screen as screen_load does — init
+   run, then the globals sealed before the hooks compile — so a name typed
+   wrong fails the build. */
 bool screen_build(roc *m, const char *name, uint8_t *dst, size_t cap, size_t *len);
 
 /* Loads a screen and builds it in the canvas without sending a byte: the

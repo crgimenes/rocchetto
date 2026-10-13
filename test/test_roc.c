@@ -7863,6 +7863,37 @@ static void test_missing_screen_names_its_init(void) {
     tree_set_source(NULL, 0);
 }
 
+/* The kit runs before the common file, so a layer's common file and its
+   screens both build on it, from the source and from the unit alike. */
+static void test_screen_kit_runs_before_common(void) {
+    static const char kit[] = "(def kit-word (fn () \"from the kit\"))\n";
+    static const char common[] = "(def layer-word (str-concat (kit-word) \", then the layer\"))\n";
+    static const char init[] = "(def title layer-word)\n";
+    static const char draw[] = "(print-at 1 1 title)\n(print-at 2 1 (kit-word))\n";
+    const tree_file tree[] = {
+        {"kit.filo", (const uint8_t *)kit, sizeof(kit) - 1},
+        {"common.filo", (const uint8_t *)common, sizeof(common) - 1},
+        {"k/init.filo", (const uint8_t *)init, sizeof(init) - 1},
+        {"k/draw.filo", (const uint8_t *)draw, sizeof(draw) - 1},
+    };
+    mock_host h;
+    roc *m = boot_menu(&h);
+    drain(m);
+    tree_programs(m, tree, sizeof(tree) / sizeof(tree[0]));
+
+    CHECK(screen_load(m, "k"));
+    CHECK(screen_error(m)[0] == '\0');
+    CHECK(strstr(canvas_row(&m->cmp.target, 1), "from the kit, then the layer") != NULL);
+    CHECK(strstr(canvas_row(&m->cmp.target, 2), "from the kit") != NULL);
+
+    static uint8_t unit[64 * 1024];
+    size_t len = 0;
+    CHECK(screen_build(m, "k", unit, sizeof(unit), &len));
+    CHECK(filo_bc_declares(unit, len, "kit"));
+    CHECK(filo_bc_declares(unit, len, "common"));
+    tree_set_source(NULL, 0);
+}
+
 /* Art becomes cells: a drawing program writes relative cursor moves and the
    sixteen colours, and all of it has to survive the trip into the grid. */
 static void test_screen_blits_art(void) {
@@ -8543,6 +8574,7 @@ static void roc_tests(void) {
     RUN(test_cardputer_screens);
     RUN(test_screens_run_from_units);
     RUN(test_missing_screen_names_its_init);
+    RUN(test_screen_kit_runs_before_common);
     RUN(test_screen_loads_from_the_tree);
     RUN(test_screen_seals_its_globals);
     RUN(test_screen_key_hook_and_navigation);

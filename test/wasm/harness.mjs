@@ -104,6 +104,9 @@ export async function boot({ site = {}, index = INDEX, home = null, storage = nu
       t.downloads.push({ name: text(np, nl), bytes: new Uint8Array(mem.buffer, ptr, len).slice() });
     },
   };
+  if (process.env.ROC_WASM_IMPORTS) {
+    Object.assign(env, await import(process.env.ROC_WASM_IMPORTS));
+  }
   const { instance } = await WebAssembly.instantiate(bytes, { env });
   const w = instance.exports;
   mem = w.memory;

@@ -43,6 +43,12 @@ the commands that are its own, the effects between screens, and what it
 does with the host's stream. Its tests include `test/test_roc.c`
 (`ROC_TEST_NO_MAIN`) and call `roc_tests()` before their own.
 
+Every screen runs `kit.filo` and then `common.filo` from the root of the
+tree, when they are there, before its own `init.filo`. The kit is
+filo-term's (`kit/`, the frame, menu, form and table a screen draws
+with), so a layer adds `$(FILO_TERM)/kit` to `TREE_ROOTS`. Its
+`common.filo` is its own.
+
 ## Install
 
 ```
