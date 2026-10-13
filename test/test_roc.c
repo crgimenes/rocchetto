@@ -621,19 +621,19 @@ static void test_tab_completion(void) {
     const char *o = drain(m);
     CHECK(help_shown(m, o));
 
-    /* several commands start with c: nothing to add, so they are listed */
+    /* several commands start with c: nothing to add, so they are listed,
+       the shell's own first (a layer's programs in /bin may join after
+       them: the board's carillon) */
     send(m, "c\t");
     o = drain(m);
-    if (strstr(
-            o,
-            "cd  cat  corewar  chgrp  chmod  chown  cksum  clear  cmp  comm  cp  crontab  cut") ==
-        NULL) {
+    const char *own = strstr(o, "cd  cat  corewar  ");
+    if (own == NULL ||
+        strstr(own, "chgrp  chmod  chown  cksum  clear  cmp  comm  cp  crontab  cut") == NULL) {
         fprintf(stderr, "c<TAB>: %s\n", o);
     }
-    CHECK(strstr(
-              o,
-              "cd  cat  corewar  chgrp  chmod  chown  cksum  clear  cmp  comm  cp  crontab  cut") !=
-          NULL);
+    CHECK(own != NULL);
+    CHECK(own != NULL &&
+          strstr(own, "chgrp  chmod  chown  cksum  clear  cmp  comm  cp  crontab  cut") != NULL);
     send(m, "\x15");
     drain(m);
 
