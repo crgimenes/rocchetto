@@ -258,6 +258,47 @@ static bool mock_run(void *ctx, int argc, char *const argv[]) {
     return true;
 }
 
+static const char *mock_complete(void *ctx, const char *command) {
+    (void)ctx;
+    return strcmp(command, "ssh") == 0 ? "lab lua lab-ts" : NULL;
+}
+
+/* After a command of the host, Tab offers the host's words for it (ssh's
+   servers), past an '@' too; nothing there, it is a path again. */
+static void test_host_completes_words(void) {
+    mock_host h;
+    memset(&h, 0, sizeof(h));
+    roc_host host = {.filo_extend = roc_host_extend,
+                     .ctx = &h,
+                     .request = mock_request,
+                     .scratch = mock_scratch,
+                     .run = mock_run,
+                     .complete = mock_complete,
+                     .commands = "ssh key"};
+    roc_init(&M, &host, 80, 24, ROC_F_PROMPT);
+    roc_feed(&M, h.req_id, (const uint8_t *)test_index, strlen(test_index));
+    roc_feed_eof(&M, h.req_id);
+    drain(&M);
+    send(&M, "ssh lu\t");
+    drain(&M);
+    CHECK(M.line_len == 8 && memcmp(M.line, "ssh lua ", 8) == 0);
+    send(&M, "\x15ssh crg@la\t");
+    drain(&M);
+    CHECK(M.line_len == 11 && memcmp(M.line, "ssh crg@lab", 11) == 0);
+    send(&M, "\t");
+    const char *o = drain(&M);
+    CHECK(strstr(o, "lab  lab-ts\r\n") != NULL);
+    send(&M, "\x15ssh /pu\t");
+    drain(&M);
+    CHECK(M.line_len == 9 && memcmp(M.line, "ssh /pub/", 9) == 0);
+    send(&M, "\x15key l\t");
+    drain(&M);
+    CHECK(M.line_len == 5);
+    send(&M, "\x15"
+             "exit\r");
+    drain(&M);
+}
+
 static void test_host_runs_commands(void) {
     mock_host h;
     memset(&h, 0, sizeof(h));
@@ -8444,6 +8485,7 @@ static void roc_tests(void) {
     RUN(test_set_user);
     RUN(test_notice);
     RUN(test_host_runs_commands);
+    RUN(test_host_completes_words);
     RUN(test_utf8_decode);
     RUN(test_utf8_width);
     RUN(test_vfs_resolve);

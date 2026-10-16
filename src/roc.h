@@ -256,6 +256,10 @@ typedef struct {
     /* the names run takes, space-separated, so type, help and Tab know
        them; NULL or "": none to tell */
     const char *commands;
+    /* Tab on a word after one of those commands: what that word may be
+       (ssh's servers), space-separated, valid until the next call. NULL,
+       or NULL back: a path, as after any command. */
+    const char *(*complete)(void *ctx, const char *command);
     /* This host's own builtins and globals, past roc's, into every Filo
        context the shell makes — scripts, screens, apps — so a program can
        use what only this host offers (a board's visitor count, its chat)

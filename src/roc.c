@@ -781,6 +781,47 @@ static size_t command_matches(roc *m, const uint8_t *prefix, size_t plen, match 
     return n;
 }
 
+/* A word after one of the host's commands: the words the host offers for
+   it, past an '@' when the word has one (ssh user@server). */
+static size_t host_word_matches(roc *m, const uint8_t *tok, size_t tlen, size_t *prefix_at,
+                                match *out) {
+    size_t c0 = 0;
+    while (c0 < m->line_len && m->line[c0] == ' ') {
+        c0++;
+    }
+    size_t cl = 0;
+    while (c0 + cl < m->line_len && m->line[c0 + cl] != ' ') {
+        cl++;
+    }
+    char cmd[64];
+    if (m->host.complete == NULL || cl == 0 || cl >= sizeof(cmd) ||
+        !roc_host_command(m, (const char *)m->line + c0, cl)) {
+        return 0;
+    }
+    memcpy(cmd, m->line + c0, cl);
+    cmd[cl] = '\0';
+    const char *w = m->host.complete(m->host.ctx, cmd);
+    if (w == NULL) {
+        return 0;
+    }
+    const uint8_t *at = memchr(tok, '@', tlen);
+    *prefix_at = at != NULL ? (size_t)(at - tok) + 1 : 0;
+    const uint8_t *prefix = tok + *prefix_at;
+    size_t plen = tlen - *prefix_at;
+    size_t n = 0;
+    while (*w != '\0' && n < MATCH_MAX) {
+        size_t wl = strcspn(w, " ");
+        if (wl > 0 && starts_with(w, wl, prefix, plen)) {
+            out[n].text = w;
+            out[n].len = wl;
+            out[n].dir = false;
+            n++;
+        }
+        w += wl + strspn(w + wl, " ");
+    }
+    return n;
+}
+
 /* The token is a path: what comes before its last '/' picks the directory,
    what comes after is the prefix to match against that directory's entries. */
 static size_t file_matches(roc *m, const uint8_t *tok, size_t tlen, size_t *prefix_at, match *out) {
@@ -960,8 +1001,9 @@ static void repl_complete(roc *m) {
 }
 
 /* Tab at the end of a word. The first word is a command and completes from
-   the command table; any other word is a path and completes from the
-   directory it names, relative to cwd. At the REPL, a word is a Filo name. */
+   the command table; after a command of the host, a word is first one the
+   host offers; any other word is a path and completes from the directory it
+   names, relative to cwd. At the REPL, a word is a Filo name. */
 static void line_complete(roc *m) {
     if (m->sc.repl) {
         repl_complete(m);
@@ -988,10 +1030,14 @@ static void line_complete(roc *m) {
     if (is_command) {
         n = command_matches(m, tok, tlen, ms);
     } else {
-        if (!m->indexed) {
-            return;
+        n = host_word_matches(m, tok, tlen, &prefix_at, ms);
+        if (n == 0) {
+            if (!m->indexed) {
+                return;
+            }
+            prefix_at = 0;
+            n = file_matches(m, tok, tlen, &prefix_at, ms);
         }
-        n = file_matches(m, tok, tlen, &prefix_at, ms);
     }
     offer(m, ms, n, tlen - prefix_at);
 }
