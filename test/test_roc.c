@@ -1822,7 +1822,7 @@ static void test_editor(void) {
     send(m, "edit ~/n.txt\r");
     drain(m);
     CHECK(m->t.napps == 1 && strcmp(m->scr.name, "edt") == 0);
-    CHECK(canvas_has(&m->cmp.target, "^S save  ^Q quit  ^F find  ^G next  Esc menu"));
+    CHECK(canvas_has(&m->cmp.target, "Esc menu") && !canvas_has(&m->cmp.target, "^S save"));
     CHECK(canvas_has(&m->cmp.target, "/home/guest/n.txt  Line 1  Col 1"));
     send(m, "hello\rworld");
     drain(m);
