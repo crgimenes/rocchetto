@@ -591,6 +591,9 @@ void screen_context_init(roc *m, filo_ctx *ctx, uint8_t *persistent, size_t plen
     (void)filo_set_global(ctx, "A_REV", filo_num(CV_A_REV));
     (void)filo_set_global(ctx, "C_DEFAULT", filo_num(-1));
     (void)filo_set_global(ctx, "KEY", filo_num(0));
+    /* the cell of the last click, for KEY_CLICK */
+    (void)filo_set_global(ctx, "MX", filo_num(0));
+    (void)filo_set_global(ctx, "MY", filo_num(0));
     (void)filo_set_global(ctx, "MS", filo_num(0));
     (void)filo_set_global(ctx, "ARG", filo_cstring(""));
     (void)filo_set_global(ctx, "BACK", filo_cstring(""));
@@ -623,6 +626,7 @@ void screen_context_init(roc *m, filo_ctx *ctx, uint8_t *persistent, size_t plen
     (void)filo_set_global(ctx, "KEY_DEL", filo_num(FT_KEY_DEL));
     (void)filo_set_global(ctx, "KEY_INS", filo_num(FT_KEY_INS));
     (void)filo_set_global(ctx, "KEY_ESC", filo_num(FT_KEY_ESC));
+    (void)filo_set_global(ctx, "KEY_CLICK", filo_num(FT_KEY_CLICK));
     /* added to a key: Shift+Up is (+ KEY_UP KEY_SHIFT) */
     (void)filo_set_global(ctx, "KEY_SHIFT", filo_num(FT_KEY_SHIFT));
     (void)filo_set_global(ctx, "KEY_ALT", filo_num(FT_KEY_ALT));
@@ -1245,6 +1249,8 @@ bool screen_key(roc *m, uint32_t cp) {
     } else {
         s->key_cp = cp;
         (void)filo_set_global(&s->ctx, "KEY", filo_num(cp));
+        (void)filo_set_global(&s->ctx, "MX", filo_num(m->t.mouse_col));
+        (void)filo_set_global(&s->ctx, "MY", filo_num(m->t.mouse_row));
         if (!run_hook(m, SCR_HOOK_KEY)) {
             return false;
         }

@@ -1773,6 +1773,11 @@ static void on_input(void *user, keyin_event ev, uint32_t cp) {
         }
         return;
     }
+    case KEYIN_MOUSE:
+        m->t.mouse_col = (uint16_t)(cp & 0xFFFFU);
+        m->t.mouse_row = (uint16_t)(cp >> 16U);
+        cp = FT_KEY_CLICK;
+        break;
     case KEYIN_KEY:
         break;
     }

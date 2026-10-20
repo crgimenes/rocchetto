@@ -4420,7 +4420,8 @@ static void test_paste_into_editor(void) {
     drain(m);
     send(m, "edit ~/p.txt\r");
     const char *o = drain(m);
-    CHECK(strstr(o, "\x1b[?2004h") != NULL); /* asked for while the app is up */
+    /* asked for while the app is up: marked pastes and the mouse */
+    CHECK(strstr(o, "\x1b[?2004h\x1b[?1000h\x1b[?1006h") != NULL);
     send(m, "\x1b[200~");
     send(m, "one\ntwo\nthree");
     o = drain(m);
@@ -7532,6 +7533,37 @@ static void collect(void *user, keyin_event ev, uint32_t cp) {
     }
 }
 
+/* SGR mouse reports: the left button pressed is a click with its cell
+   (0-based, the report is 1-based), the wheel is an arrow, and a release,
+   a drag or another button is swallowed like any unknown sequence. */
+static uint32_t clicked = 0;
+static int nclicked = 0;
+
+static void collect_mouse(void *user, keyin_event ev, uint32_t cp) {
+    collect(user, ev, cp);
+    if (ev == KEYIN_MOUSE) {
+        clicked = cp;
+        nclicked++;
+    }
+}
+
+static void test_keyin_mouse(void) {
+    keyin k;
+    keyin_init(&k);
+    ndecoded = 0;
+    nclicked = 0;
+    const char *in = "\x1b[<0;5;8M\x1b[<0;5;8m\x1b[<64;1;1M\x1b[<65;1;1M\x1b[<2;3;3M\x1b[<32;4;4M\x1b[<4;7;2M";
+    for (const char *p = in; *p != '\0'; p++) {
+        keyin_feed(&k, (uint8_t)*p, collect_mouse, NULL);
+    }
+    CHECK(nclicked == 2);
+    CHECK(clicked == ((1U << 16U) | 6U)); /* shift-click, still a click at (6,1) */
+    CHECK(ndecoded == 2);
+    CHECK(decoded[0] == FT_KEY_UP && decoded[1] == FT_KEY_DOWN);
+    CHECK(k.esc == 0);
+    ndecoded = 0;
+}
+
 static void test_keyin_function_keys(void) {
     keyin k;
     keyin_init(&k);
@@ -8569,6 +8601,7 @@ static void roc_tests(void) {
     RUN(test_md_pager_wraps_styles);
     RUN(test_md_pager_hangs_lists);
     RUN(test_builtin_table_has_room);
+    RUN(test_keyin_mouse);
     RUN(test_keyin_function_keys);
     RUN(test_terminal_replies_never_reach_the_line);
     RUN(test_screen_errors_say_where);

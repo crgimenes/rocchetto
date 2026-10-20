@@ -105,9 +105,12 @@
    source is parsed (mkunits, compose, the tests: a board's units are
    bytecode and parse nothing), about twelve bytes of it for each byte of
    source — a 20 KB common file took the whole of 256 KB — and where a draw
-   wraps a channel's 16 KB of messages on every paint. 1.6 MB. */
+   wraps a channel's 16 KB of messages on every paint. The persistent
+   arena holds the kit, the common file and the hooks compiled: the
+   board's largest screen (sysop_mail) filled 512 KB when the kit's menu
+   learned the mouse (2026-10). 1.75 MB. */
 #ifndef ROC_CFG_SCR_MEM_PERSISTENT
-#define ROC_CFG_SCR_MEM_PERSISTENT (512 * 1024)
+#define ROC_CFG_SCR_MEM_PERSISTENT (640 * 1024)
 #endif
 #ifndef ROC_CFG_SCR_MEM_RUN
 #define ROC_CFG_SCR_MEM_RUN (1024 * 1024)
