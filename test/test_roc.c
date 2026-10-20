@@ -7552,7 +7552,8 @@ static void test_keyin_mouse(void) {
     keyin_init(&k);
     ndecoded = 0;
     nclicked = 0;
-    const char *in = "\x1b[<0;5;8M\x1b[<0;5;8m\x1b[<64;1;1M\x1b[<65;1;1M\x1b[<2;3;3M\x1b[<32;4;4M\x1b[<4;7;2M";
+    const char *in =
+        "\x1b[<0;5;8M\x1b[<0;5;8m\x1b[<64;1;1M\x1b[<65;1;1M\x1b[<2;3;3M\x1b[<32;4;4M\x1b[<4;7;2M";
     for (const char *p = in; *p != '\0'; p++) {
         keyin_feed(&k, (uint8_t)*p, collect_mouse, NULL);
     }
