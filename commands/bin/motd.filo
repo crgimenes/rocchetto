@@ -1,0 +1,13 @@
+; motd: the message of the day, the one the host puts in /lib/roc/motd.txt
+; (a board writes its own); without one, it says so.
+
+(def usage "usage: motd\nThe message of the day of this machine.")
+(def MOTD "/lib/roc/motd.txt")
+
+(letv (opts words bad) (getopt ARGS "h")
+  (cond
+    ((not (= bad "")) (do (err-write "motd: bad option -" bad "\n" usage "\n") (exit-status 2)))
+    ((not (is-empty opts)) (out-write usage "\n"))
+    ((not (is-empty words)) (do (err-write usage "\n") (exit-status 2)))
+    ((is-nil (file-stat MOTD)) (out-write "no message of the day\n"))
+    (else (out-write (read-file MOTD)))))

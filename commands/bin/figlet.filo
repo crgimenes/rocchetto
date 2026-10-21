@@ -1,5 +1,6 @@
 ; figlet [-g] [-w width] [text...]: the text in big letters, two rows of
-; half blocks a line, the board's own letters (the ones of its small logo).
+; half blocks a line, the board's own letters: crg's alphabet, the one of
+; the small logo.
 ; With no text, each line of the input. -g paints them white-hot to coral,
 ; letter by letter; -w breaks between words at that width (on a terminal,
 ; at its own). A letter it has no shape for comes out as a question mark.
@@ -8,13 +9,13 @@
 
 (def FONT
   (list
-    (tuple "A" "█▀█" "█▀█") (tuple "B" "█▄▄" "█▄█") (tuple "C" "█▀▀" "█▄▄") (tuple "D" "█▀▄" "█▄▀")
+    (tuple "A" "▄▀█" "█▀█") (tuple "B" "█▄▄" "█▄█") (tuple "C" "█▀▀" "█▄▄") (tuple "D" "█▀▄" "█▄▀")
     (tuple "E" "█▀▀" "██▄") (tuple "F" "█▀▀" "█▀ ") (tuple "G" "█▀▀" "█▄█") (tuple "H" "█ █" "█▀█")
     (tuple "I" "█" "█") (tuple "J" "  █" "█▄█") (tuple "K" "█▄▀" "█ █") (tuple "L" "█  " "█▄▄")
     (tuple "M" "█▀▄▀█" "█ ▀ █") (tuple "N" "█▄ █" "█ ▀█") (tuple "O" "█▀█" "█▄█") (tuple "P" "█▀█" "█▀▀")
-    (tuple "Q" "█▀█" "▀▀█") (tuple "R" "█▀█" "█▀▄") (tuple "S" "█▀▀" "▄▄█") (tuple "T" "▀█▀" " █ ")
+    (tuple "Q" "█▀█" "▀▀█") (tuple "R" "█▀█" "█▀▄") (tuple "S" "█▀" "▄█") (tuple "T" "▀█▀" " █ ")
     (tuple "U" "█ █" "█▄█") (tuple "V" "█ █" "▀▄▀") (tuple "W" "█ █ █" "▀▄▀▄▀") (tuple "X" "▀▄▀" "█ █")
-    (tuple "Y" "█▄█" " █ ") (tuple "Z" "▀▀█" "█▄▄") (tuple "0" "█▀█" "█▄█") (tuple "1" "▄█" " █")
+    (tuple "Y" "█▄█" " █ ") (tuple "Z" "▀█" "█▄") (tuple "0" "█▀█" "█▄█") (tuple "1" "▄█" " █")
     (tuple "2" "▀▀█" "█▀▀") (tuple "3" "▀▀█" "▄▄█") (tuple "4" "█ █" "▀▀█") (tuple "5" "█▀▀" "▄▄█")
     (tuple "6" "█▀▀" "█▄█") (tuple "7" "▀▀█" "  █") (tuple "8" "█▄█" "█▄█") (tuple "9" "█▀█" "▀▀█")
     (tuple " " "  " "  ") (tuple "." " " "▄") (tuple "," " " "▄") (tuple "!" "█" "▄")

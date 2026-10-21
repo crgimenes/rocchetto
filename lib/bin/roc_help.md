@@ -75,6 +75,7 @@ The shell carries its own files: the programs behind commands like this one live
 
 - `ver` — the version of this shell
 - `whoami`, `hostname`, `uname [-a]`, `logname` — who and where you are, what system this is
+- `uptime`, `motd` — the time and how long you have been connected; the message of the day
 - `fortune` — a saying from the old days of computing
 - `ansi [-ci] [file]` — ANSI art from the BBS days (CP437, or UTF-8) on the terminal; `-i` tells its SAUCE: title, author, group
 - `figlet [-g] [-w width] [text...]` — the text in big letters of half blocks (`figlet -g hello`, `echo hi | figlet`)

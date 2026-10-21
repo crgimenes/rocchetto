@@ -181,6 +181,17 @@ static int b_bytes(filo_ctx *ctx, const filo_value *a, uint32_t n, filo_value *o
     return FILO_OK;
 }
 
+/* (uptime): the seconds this session has been connected. */
+static int b_uptime(filo_ctx *ctx, const filo_value *a, uint32_t n, filo_value *out) {
+    (void)a;
+    if (n != 0) {
+        return filo_fail(ctx, "uptime takes nothing");
+    }
+    uint32_t secs = roc_of(ctx)->up_ms / 1000U; /* whole seconds, on purpose */
+    *out = filo_num((double)secs);
+    return FILO_OK;
+}
+
 /* (qr-encode s): the QR code of the bytes of s (level M, up to 106 bytes)
    as its rows, each a string of 1 (dark) and 0; nil when s is too long. */
 static int b_qr_encode(filo_ctx *ctx, const filo_value *a, uint32_t n, filo_value *out) {
@@ -1424,6 +1435,7 @@ const script_builtin script_data_builtins[] = {
     {"env-list", b_env_list},
     {"now", b_now},
     {"qr-encode", b_qr_encode},
+    {"uptime", b_uptime},
     {"glob-match", b_glob_match},
     {"path-resolve", b_path_resolve},
     {"file-stat", b_file_stat},

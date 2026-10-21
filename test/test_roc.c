@@ -3404,6 +3404,28 @@ static void test_qr(void) {
     util_case(m, "printf '' | qr", "", 2, "qr: nothing to encode");
 }
 
+/* uptime: the local time and the session's, as uptime words it, in
+   minutes, hours and days; motd: the host's message, or that there is none */
+static void test_uptime_motd(void) {
+    mock_host h;
+    roc *m = boot(&h);
+    drain(m);
+    m->host.clock = test_clock; /* 14:05 UTC, three hours west */
+    m->up_ms = 60U * 1000U;
+    util_case(m, "uptime", "11:05  up 1 min\n", 0, NULL);
+    m->up_ms = 65U * 60U * 1000U;
+    util_case(m, "uptime", "11:05  up 1:05\n", 0, NULL);
+    m->up_ms = ((2U * 86400U) + (3U * 3600U) + (4U * 60U)) * 1000U;
+    util_case(m, "uptime", "11:05  up 2 days, 3:04\n", 0, NULL);
+    util_case(m, "uptime x", "", 2, "usage: uptime");
+    /* the host's file whole when there is one (a board ships it), else a word */
+    util_case(
+        m,
+        "motd > ~/mo; if [ -e /lib/roc/motd.txt ]; then cmp ~/mo /lib/roc/motd.txt && echo ok; "
+        "else grep -q 'no message of the day' ~/mo && echo ok; fi",
+        "ok\n", 0, NULL);
+}
+
 static void test_fun_commands(void) {
     mock_host h;
     roc *m = boot(&h);
@@ -8821,6 +8843,7 @@ static void roc_tests(void) {
     RUN(test_ansi_art);
     RUN(test_figlet);
     RUN(test_qr);
+    RUN(test_uptime_motd);
     RUN(test_shell_subshells);
     RUN(test_shell_ifs_alias);
     RUN(test_tools_scratch);

@@ -1,0 +1,29 @@
+; uptime: the time now, and how long this session has been connected, the
+; way uptime says it: "up 12 mins", "up 1:05", "up 2 days, 3:04".
+
+(def usage "usage: uptime\nThe time, and how long this session has been connected.")
+(def two (fn (n) (if (< n 10) (str-concat "0" (int-text n)) (int-text n))))
+
+(def span
+  (fn (secs)
+    (let ((days (floor (/ secs 86400)))
+          (hours (floor (/ (% secs 86400) 3600)))
+          (mins (floor (/ (% secs 3600) 60))))
+      (let ((clock (if (> hours 0) (str-concat (int-text hours) ":" (two mins))
+                     (str-concat (int-text mins) (if (= mins 1) " min" " mins")))))
+        (if (> days 0) (str-concat (int-text days) (if (= days 1) " day, " " days, ") clock) clock)))))
+
+(def now-hm
+  (fn ()
+    (let ((t (now)) (tz (time-zone)))
+      (if (or (is-nil t) (is-nil tz))
+        ""
+        (let ((local (% (+ t (* tz 60)) 86400)))
+          (str-concat (two (floor (/ local 3600))) ":" (two (floor (/ (% local 3600) 60))) "  "))))))
+
+(letv (opts words bad) (getopt ARGS "h")
+  (cond
+    ((not (= bad "")) (do (err-write "uptime: bad option -" bad "\n" usage "\n") (exit-status 2)))
+    ((not (is-empty opts)) (out-write usage "\n"))
+    ((not (is-empty words)) (do (err-write usage "\n") (exit-status 2)))
+    (else (out-write (now-hm) "up " (span (uptime)) "\n"))))
