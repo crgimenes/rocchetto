@@ -669,12 +669,14 @@ static void test_tab_completion(void) {
     o = drain(m);
     const char *own = strstr(o, "cd  cat  corewar  ");
     if (own == NULL ||
-        strstr(own, "chgrp  chmod  chown  cksum  clear  cmp  comm  cp  crontab  cut") == NULL) {
+        strstr(own, "chgrp  chmod  chown  cksum  clear  cmp  colors  comm  cp  crontab  cut") ==
+            NULL) {
         fprintf(stderr, "c<TAB>: %s\n", o);
     }
     CHECK(own != NULL);
     CHECK(own != NULL &&
-          strstr(own, "chgrp  chmod  chown  cksum  clear  cmp  comm  cp  crontab  cut") != NULL);
+          strstr(own, "chgrp  chmod  chown  cksum  clear  cmp  colors  comm  cp  crontab  cut") !=
+              NULL);
     send(m, "\x15");
     drain(m);
 
@@ -3223,6 +3225,44 @@ static bool test_clock(void *ctx, int64_t *secs, int32_t *tz_minutes) {
     *secs = 1790517909;
     *tz_minutes = -180;
     return true;
+}
+
+/* cal, fortune, lolcat, colors: the board's toys, every one with
+   a usage for -h. The clock is test_clock's Sunday, 2026-09-27. */
+static void test_fun_commands(void) {
+    mock_host h;
+    roc *m = boot(&h);
+    drain(m);
+    util_case(m, "cal", "", 1, "cal: this machine has no clock");
+    m->host.clock = test_clock;
+    util_case(m, "cal 9 2026",
+              "   September 2026\nSu Mo Tu We Th Fr Sa\n       1  2  3  4  5\n"
+              " 6  7  8  9 10 11 12\n13 14 15 16 17 18 19\n20 21 22 23 24 25 26\n27 28 29 30\n\n",
+              0, NULL);
+    util_case(m, "cal 2 2024 | tail -n 3", "18 19 20 21 22 23 24\n25 26 27 28 29\n\n", 0, NULL);
+    util_case(m, "cal 2026 | head -n 4",
+              "                             2026\n\n      January               February           "
+              "    March\n"
+              "Su Mo Tu We Th Fr Sa  Su Mo Tu We Th Fr Sa  Su Mo Tu We Th Fr Sa\n",
+              0, NULL);
+    util_case(m, "cal 13 2026", "", 1, "13: not a month from 1 to 12");
+    util_case(m, "cal 1 2 3", "", 2, "usage: cal");
+    util_case(m, "cal -h", "usage: cal [[month] year]\n", 0, NULL);
+    send(m, "cal\r");
+    const char *o = drain(m);
+    CHECK(strstr(o, "September 2026") != NULL && strstr(o, "\x1b[7m27\x1b[0m") != NULL);
+    util_case(m, "fortune", "It's not a bug, it's an undocumented feature.\n\t\t-- anonymous\n", 0,
+              NULL);
+    util_case(m, "fortune x", "", 2, "usage: fortune");
+    util_case(m, "echo hi | lolcat", "\x1b[38;5;196mhi\x1b[0m\n", 0, NULL);
+    /* an escape in the text passes whole; the next row starts further on */
+    util_case(m, "printf '\\033[1mab\\nxyzw\\n' | lolcat",
+              "\x1b[1m\x1b[38;5;196mab\x1b[0m\n\x1b[38;5;196mx\x1b[38;5;202myzw\x1b[0m\n", 0, NULL);
+    util_case(m, "seq 2 > ~/l2; lolcat ~/l2 - < ~/l2 | wc -l", "4\n", 0, NULL);
+    util_case(m, "lolcat ~/none", "", 1, "lolcat: /home/guest/none: No such file");
+    util_case(m, "colors | wc -l", "18\n", 0, NULL);
+    util_case(m, "colors | grep -c '48;5;255m 255'", "1\n", 0, NULL);
+    util_case(m, "colors -z", "", 2, "usage: colors");
 }
 
 static void test_shell_trap_type_date(void) {
@@ -8576,6 +8616,7 @@ static void roc_tests(void) {
     RUN(test_shell_local_getopts);
     RUN(test_shell_textutils);
     RUN(test_shell_trap_type_date);
+    RUN(test_fun_commands);
     RUN(test_shell_subshells);
     RUN(test_shell_ifs_alias);
     RUN(test_tools_scratch);

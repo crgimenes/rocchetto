@@ -1,0 +1,45 @@
+; colors: the terminal's 256 colours, each on its own ground with its
+; number: the sixteen, the 6x6x6 cube, the greys. Narrower than 72
+; columns the cube comes a red at a time.
+
+(def usage "usage: colors\nThe 256 colours of the terminal with their numbers, for picking one.")
+
+; an xterm colour's red, green and blue
+(def LEVELS (list 0 95 135 175 215 255))
+(def SIXTEEN (list (tuple 0 0 0) (tuple 128 0 0) (tuple 0 128 0) (tuple 128 128 0) (tuple 0 0 128) (tuple 128 0 128)
+                   (tuple 0 128 128) (tuple 192 192 192) (tuple 128 128 128) (tuple 255 0 0) (tuple 0 255 0)
+                   (tuple 255 255 0) (tuple 0 0 255) (tuple 255 0 255) (tuple 0 255 255) (tuple 255 255 255)))
+(def rgb (fn (n)
+  (cond ((< n 16) (nth SIXTEEN n))
+        ((< n 232) (let ((c (- n 16))) (tuple (nth LEVELS (floor (/ c 36))) (nth LEVELS (% (floor (/ c 6)) 6)) (nth LEVELS (% c 6)))))
+        (else (let ((g (+ 8 (* (- n 232) 10)))) (tuple g g g))))))
+
+; black on a light ground, white on a dark one
+(def ink (fn (n) (letv (r g b) (rgb n) (if (> (+ (* r 299) (* g 587) (* b 114)) 128000) 16 231))))
+
+(def pad3 (fn (n) (let ((t (int-text n))) (str-concat (byte-sub "  " 0 (- 3 (byte-len t))) t))))
+(def swatch (fn (n) (str-concat (sgr 38 5 (ink n) 48 5 n) " " (pad3 n) (sgr 0))))
+(def line (fn (codes) (out-write (str-join "" (map swatch codes)) "\n")))
+(def cube (fn (r g b) (+ 16 (* r 36) (* g 6) b)))
+
+; the cube's row g with the reds rs side by side
+(def cube-row (fn (rs g) (fold (fn (acc r) (list-concat acc (map (fn (b) (cube r g b)) (range 0 6)))) (list) rs)))
+
+(def show (fn (wide)
+  (line (range 0 8))
+  (line (range 8 16))
+  (out-write "\n")
+  (if wide
+    (map (fn (rs) (map (fn (g) (line (cube-row rs g))) (range 0 6))) (list (range 0 3) (range 3 6)))
+    (map (fn (r) (map (fn (g) (line (cube-row (list r) g))) (range 0 6))) (range 0 6)))
+  (out-write "\n")
+  (line (range 232 244))
+  (line (range 244 256))))
+
+(letv (opts words bad) (getopt ARGS "h")
+  (let ((term (out-terminal)))
+    (cond
+      ((not (= bad "")) (do (err-write "colors: bad option -" bad "\n" usage "\n") (exit-status 2)))
+      ((not (is-empty opts)) (out-write usage "\n"))
+      ((not (is-empty words)) (do (err-write usage "\n") (exit-status 2)))
+      (else (show (if (is-nil term) #t (letv (cols rows) term (>= cols 72))))))))

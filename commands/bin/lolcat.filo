@@ -1,0 +1,51 @@
+; lolcat [file...]: cat in a rainbow, a diagonal of colours across the
+; lines. A file of - (or none) is what a | hands over. Escapes already in
+; the text pass through, so `banner hi | lolcat` keeps its shape.
+
+(def usage "usage: lolcat [file...]\nThe files (or what a | hands over) in a rainbow, a diagonal across the lines.")
+
+(def RAINBOW (list 196 202 208 214 220 226 190 154 118 82 46 47 48 49 50 51 45 39 33 27 21 57 93 129 165 201 200 199 198 197))
+(def colour (fn (row col) (nth RAINBOW (% (floor (/ (+ col (* row 2)) 3)) (length RAINBOW)))))
+
+; one line, without its \n, painted: a colour is written only where it
+; changes, and an escape (ESC to its final letter) is copied as it came
+(def paint (fn (row text)
+  (letv (pieces col last esc)
+        (fold (fn (st cp)
+                (letv (pieces col last esc) st
+                  (cond
+                    ((= cp 27) (tuple (list-append pieces (utf8-encode cp)) col last 1))
+                    ((= esc 1) (tuple (list-append pieces (utf8-encode cp)) col last (if (= cp 91) 2 0)))
+                    ((= esc 2) (tuple (list-append pieces (utf8-encode cp)) col last (if (and (>= cp 64) (<= cp 126)) 0 2)))
+                    (else
+                      (let ((c (colour row col)))
+                        (tuple (list-append pieces (str-concat (if (= c last) "" (sgr 38 5 c)) (utf8-encode cp)))
+                               (+ col (math-max 1 (rune-width cp))) c 0))))))
+              (tuple (list) 0 -1 0)
+              (utf8-runes text))
+    (out-write (str-join "" pieces) (sgr 0) "\n"))))
+
+(def without-nl (fn (l) (if (= (byte-sub l (- (byte-len l) 1)) "\n") (byte-sub l 0 (- (byte-len l) 1)) l)))
+
+; the lines of the input, from row on; the row after the last
+(def from-input (fn (row)
+  (letv (r)
+        (iterate (fn (st) (letv (r) st (let ((l (in-line))) (if (is-nil l) (list) (do (paint r (without-nl l)) (tuple (+ r 1)))))))
+                 (tuple row))
+    r)))
+
+(def from-file (fn (row path)
+  (let ((st (file-stat path)))
+    (if (or (is-nil st) (letv (kind size mtime from) st (not (= kind "file"))))
+      (do (err-write "lolcat: " path ": No such file\n") (exit-status 1) row)
+      (let ((lines (str-split "\n" (read-file path))))
+        (let ((n (if (= (nth lines (- (length lines) 1)) "") (- (length lines) 1) (length lines))))
+          (map (fn (i) (paint (+ row i) (nth lines i))) (range 0 n))
+          (+ row n)))))))
+
+(letv (opts words bad) (getopt ARGS "h")
+  (cond
+    ((not (= bad "")) (do (err-write "lolcat: bad option -" bad "\n" usage "\n") (exit-status 2)))
+    ((not (is-empty opts)) (out-write usage "\n"))
+    ((is-empty words) (from-input 0))
+    (else (fold (fn (row w) (if (= w "-") (from-input row) (from-file row w))) 0 words))))

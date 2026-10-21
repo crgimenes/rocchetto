@@ -1,0 +1,102 @@
+; cal [[month] year]: this month, a whole year, or that month of that
+; year, weeks from Sunday. Today is in reverse video on a terminal.
+
+(def usage "usage: cal [[month] year]")
+(def months (list "January" "February" "March" "April" "May" "June" "July" "August" "September"
+                  "October" "November" "December"))
+(def width 20)
+
+(def leap (fn (y) (and (= (% y 4) 0) (or (not (= (% y 100) 0)) (= (% y 400) 0)))))
+(def days-in (fn (y m) (if (and (= m 2) (leap y)) 29 (nth (list 31 28 31 30 31 30 31 31 30 31 30 31) (- m 1)))))
+
+; days since 1970-01-01, Howard Hinnant's days_from_civil
+(def civil-days (fn (y m d)
+  (let ((y2 (if (<= m 2) (- y 1) y)))
+    (let ((era (floor (/ y2 400))))
+      (let ((yoe (- y2 (* era 400)))
+            (mp (if (> m 2) (- m 3) (+ m 9))))
+        (let ((doy (+ (floor (/ (+ (* 153 mp) 2) 5)) (- d 1))))
+          (let ((doe (+ (* yoe 365) (floor (/ yoe 4)) (- 0 (floor (/ yoe 100))) doy)))
+            (+ (* era 146097) doe -719468))))))))
+
+; 0 is Sunday; 1970-01-01 was a Thursday
+(def weekday (fn (y m d) (% (+ (% (civil-days y m d) 7) 11) 7)))
+
+; days since 1970 as (year month day), the inverse, for today
+(def civil (fn (days)
+  (let ((z (+ days 719468)))
+    (let ((era (floor (/ z 146097))))
+      (let ((doe (- z (* era 146097))))
+        (let ((yoe (floor (/ (- (+ (- doe (floor (/ doe 1460))) (floor (/ doe 36524))) (floor (/ doe 146096))) 365))))
+          (let ((doy (- doe (- (+ (* 365 yoe) (floor (/ yoe 4))) (floor (/ yoe 100))))))
+            (let ((mp (floor (/ (+ (* 5 doy) 2) 153))))
+              (let ((d (+ (- doy (floor (/ (+ (* 153 mp) 2) 5))) 1))
+                    (mo (if (< mp 10) (+ mp 3) (- mp 9))))
+                (tuple (+ yoe (* era 400) (if (<= mo 2) 1 0)) mo d))))))))))
+
+(def spaces (fn (n) (str-join "" (map (fn (i) " ") (range 0 (math-max 0 n))))))
+(def centred (fn (s) (let ((l (floor (/ (- width (str-len s)) 2)))) (str-concat (spaces l) s (spaces (- width l (str-len s)))))))
+(def cell (fn (d mark) (let ((t (int-text d)) (pad (if (< d 10) " " "")))
+  (if (= d mark) (str-concat pad (sgr 7) t (sgr 0)) (str-concat pad t)))))
+
+; a month as 8 lines of width columns: title, the days' names, six weeks;
+; mark is the day to show in reverse (0 for none)
+(def month-lines (fn (y m title mark)
+  (let ((first (weekday y m 1)) (n (days-in y m)))
+    (list-concat
+      (list (centred title) "Su Mo Tu We Th Fr Sa")
+      (map (fn (w)
+             (str-join " " (map (fn (wd)
+                                  (let ((d (+ (* w 7) wd (- 0 first) 1)))
+                                    (if (and (>= d 1) (<= d n)) (cell d mark) "  ")))
+                                (range 0 7))))
+           (range 0 6))))))
+
+(def trim-right (fn (s)
+  (letv (end) (iterate (fn (st) (letv (end) st (if (and (> end 0) (= (byte-sub s (- end 1) end) " ")) (tuple (- end 1)) (list))))
+                       (tuple (byte-len s)))
+    (byte-sub s 0 end))))
+
+(def print-lines (fn (lines) (map (fn (l) (out-write (trim-right l) "\n")) lines)))
+
+(def mark-for (fn (today y m) (letv (ty tm td) today (if (and (= ty y) (= tm m)) td 0))))
+
+(def show-month (fn (y m today)
+  (print-lines (month-lines y m (str-concat (nth months (- m 1)) " " (int-text y)) (mark-for today y m)))))
+
+(def show-year (fn (y today)
+  (out-write (trim-right (str-concat (spaces 29) (int-text y))) "\n\n")
+  (map (fn (q)
+         (let ((blocks (map (fn (k) (let ((m (+ (* q 3) k 1))) (month-lines y m (nth months (- m 1)) (mark-for today y m))))
+                            (range 0 3))))
+           (print-lines (map (fn (i) (str-join "  " (map (fn (b) (nth b i)) blocks))) (range 0 8)))))
+       (range 0 4))))
+
+(def whole-re (re-compile "^[0-9]+$" "E"))
+; the number in s when it is a whole one from lo to hi, else -1
+(def whole (fn (s lo hi) (if (is-nil (re-match whole-re s)) -1 (let ((n (number s))) (if (and (>= n lo) (<= n hi)) n -1)))))
+
+(def today (fn ()
+  (let ((secs (now)) (tz (time-zone)))
+    (if (or (is-nil secs) (is-nil tz)) (tuple 0 0 0) (civil (floor (/ (+ secs (* tz 60)) 86400)))))))
+
+(def fail (fn (why) (err-write "cal: " why "\n") (exit-status 1)))
+
+(letv (opts words bad) (getopt ARGS "h")
+  (let ((n (length words)) (t (if (is-nil (out-terminal)) (tuple 0 0 0) (today))))
+    (cond
+      ((not (= bad "")) (do (err-write "cal: bad option -" bad "\n" usage "\n") (exit-status 2)))
+      ((not (is-empty opts)) (out-write usage "\n"))
+      ((> n 2) (do (err-write usage "\n") (exit-status 2)))
+      ((= n 0)
+        (letv (y m d) (today)
+          (if (= y 0) (fail "this machine has no clock") (show-month y m t))))
+      ((= n 1)
+        (let ((y (whole (nth words 0) 1 9999)))
+          (if (< y 0) (fail (str-concat (nth words 0) ": not a year from 1 to 9999")) (show-year y t))))
+      (else
+        (let ((m (whole (nth words 0) 1 12)) (y (whole (nth words 1) 1 9999)))
+          (cond
+            ((< m 0) (fail (str-concat (nth words 0) ": not a month from 1 to 12")))
+            ((< y 0) (fail (str-concat (nth words 1) ": not a year from 1 to 9999")))
+            (else (show-month y m t))))))))

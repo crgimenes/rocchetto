@@ -38,6 +38,7 @@ rocchetto, a POSIX shell with its utilities written in Filo. Here in the pager, 
 - `tsort [file]` — words two by two, "a b" a before b, put in an order that keeps them all
 - `expr` — the old way to count and match (`expr $n + 1`, `expr "$f" : '\(.*\)\.md'`)
 - `date [-u] [-r seconds] [+format]` — now, or that moment (`date +%F`, `date '+%H:%M'`)
+- `cal [[month] year]` — this month, a whole year (`cal 2026`), or that month (`cal 9 1990`); today in reverse
 
 `grep` takes a regular expression, basic as POSIX's (`grep '^ab*c$'`, `grep 'x\{2\}'`), `-E` for an extended one (`grep -E 'a|b+'`), `-F` for plain text; `-i`, `-n`, `-v` (the lines that do not match), `-c` (how many), `-x` (the whole line), `-l` (the files), `-q` (only `$?`). `sed` reads the same ones: `s/re/new/g` with `&` and `\1` in the new text, `/re/d`, `1,5p` with `-n`, `y/abc/xyz/`, `a`/`i`/`c` text, and the hold space (`h g x`).
 
@@ -73,6 +74,8 @@ The shell carries its own files: the programs behind commands like this one live
 
 - `ver` — the version of this shell
 - `whoami`, `hostname`, `uname [-a]`, `logname` — who and where you are, what system this is
+- `fortune` — a saying from the old days of computing
+- `colors` — the terminal's 256 colours with their numbers; `lolcat [file...]` paints text in a rainbow (`fortune | lolcat`)
 - `clear` — clear screen
 - `exit` — leave the shell
 - `mars <a.red> <b.red> [more...] [-r N] [-F pos] [-b]` — Core War: Redcode warriors fight in the MARS (ICWS'94) on screen, and the score comes out when you leave; `-b` fights in text alone. Classics live in `/lib/roc/warriors`, yours in `~` (write them with `edt`)
