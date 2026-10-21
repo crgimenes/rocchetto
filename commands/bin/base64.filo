@@ -1,0 +1,72 @@
+; base64 [-d] [file]: the bytes of a file (or of what a | hands over) as
+; base64, 76 characters a line; -d turns base64 back into the bytes,
+; skipping line breaks and spaces.
+
+(def usage "usage: base64 [-d] [file]\nBytes as base64 text, 76 characters a line; -d decodes, - or no file reads what a | hands over.")
+(def ALPHABET "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/")
+(def LINE_BYTES 57) ; 57 bytes are 76 characters
+
+(def letter (fn (i) (byte-sub ALPHABET i (+ i 1))))
+; from, from+step, ... below to
+(def steps (fn (from to step) (map (fn (k) (+ from (* k step))) (range 0 (ceil (/ (- to from) step))))))
+
+; the n (1 to 3) bytes from i as four characters, padded with =
+(def quad (fn (s i n)
+  (let ((b0 (byte-at s i))
+        (b1 (if (> n 1) (byte-at s (+ i 1)) 0))
+        (b2 (if (> n 2) (byte-at s (+ i 2)) 0)))
+    (str-concat (letter (floor (/ b0 4)))
+                (letter (+ (* (% b0 4) 16) (floor (/ b1 16))))
+                (if (> n 1) (letter (+ (* (% b1 16) 4) (floor (/ b2 64)))) "=")
+                (if (> n 2) (letter (% b2 64)) "=")))))
+
+(def encode (fn (s)
+  (let ((len (byte-len s)))
+    (map (fn (start)
+           (let ((end (math-min len (+ start LINE_BYTES))))
+             (out-write (str-join "" (map (fn (i) (quad s i (math-min 3 (- end i))))
+                                          (steps start end 3)))
+                        "\n")))
+         (steps 0 len LINE_BYTES)))))
+
+; the six-bit values of the text up to its padding, line breaks and spaces
+; skipped; (-1) at a character that is no base64
+(def sextets (fn (s)
+  (let ((pad (byte-find s "=")))
+    (let ((codes (filter (fn (c) (not (or (= c 10) (= c 13) (= c 32) (= c 9))))
+                         (byte-list (if (< pad 0) s (byte-sub s 0 pad))))))
+      (let ((vals (map (fn (c) (byte-find ALPHABET (bytes c))) codes)))
+        (if (is-empty (filter (fn (v) (< v 0)) vals)) vals (list -1)))))))
+
+; four values (the last group may have two or three) as their bytes
+(def group (fn (v i)
+  (let ((n (math-min 4 (- (length v) i)))
+        (a (nth v i))
+        (b (nth v (+ i 1)))
+        (c (if (> n 2) (nth v (+ i 2)) 0))
+        (d (if (> n 3) (nth v (+ i 3)) 0)))
+    (bytes (map (fn (k) (nth (list (+ (* a 4) (floor (/ b 16)))
+                                   (+ (* (% b 16) 16) (floor (/ c 4)))
+                                   (+ (* (% c 4) 64) d))
+                             k))
+                (range 0 (- n 1)))))))
+
+(def decode (fn (s)
+  (let ((v (sextets s)))
+    (if (or (and (= (length v) 1) (= (head v) -1)) (= (% (length v) 4) 1))
+      (do (err-write "base64: invalid input\n") (exit-status 1))
+      (out-write (str-join "" (map (fn (i) (group v i)) (steps 0 (length v) 4))))))))
+
+(def input (fn (words)
+  (if (or (is-empty words) (= (head words) "-")) (in-read) (read-file (head words)))))
+
+(letv (opts words bad) (getopt ARGS "dh")
+  (let ((flags (map (fn (o) (letv (l v) o l)) opts)))
+    (cond
+      ((not (= bad "")) (do (err-write "base64: bad option -" bad "\n" usage "\n") (exit-status 2)))
+      ((> (length (filter (fn (f) (= f "h")) flags)) 0) (out-write usage "\n"))
+      ((> (length words) 1) (do (err-write usage "\n") (exit-status 2)))
+      ((and (not (is-empty words)) (not (= (head words) "-")) (is-nil (file-stat (head words))))
+        (do (err-write "base64: " (head words) ": No such file\n") (exit-status 1)))
+      ((> (length (filter (fn (f) (= f "d")) flags)) 0) (decode (input words)))
+      (else (encode (input words))))))

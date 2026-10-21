@@ -1,0 +1,28 @@
+; xxd [file]: the bytes of a file (or of what a | hands over) as xxd shows
+; them: the offset, sixteen bytes in hex two by two, then the same bytes as
+; text, a dot for any that is not printable.
+
+(def usage "usage: xxd [file]\nThe bytes as hex, sixteen a line, with the offset and the printable ones as text.")
+(def HEX "0123456789abcdef")
+
+(def hex2 (fn (b) (str-concat (byte-sub HEX (floor (/ b 16)) (+ (floor (/ b 16)) 1)) (byte-sub HEX (% b 16) (+ (% b 16) 1)))))
+(def hex8 (fn (n) (let ((t (int-text n 16))) (str-concat (byte-sub "00000000" 0 (math-max 0 (- 8 (byte-len t)))) t))))
+(def shown (fn (b) (if (and (>= b 32) (<= b 126)) b 46)))
+(def spaces (fn (n) (str-join "" (map (fn (i) " ") (range 0 (math-max 0 n))))))
+
+(def row (fn (s at)
+  (let ((bs (byte-list (byte-sub s at (math-min (byte-len s) (+ at 16))))))
+    (let ((hex (str-join "" (map (fn (i) (str-concat (hex2 (nth bs i)) (if (and (= (% i 2) 1) (< i 15)) " " "")))
+                                 (range 0 (length bs))))))
+      (out-write (hex8 at) ": " hex (spaces (- 40 (byte-len hex))) " " (bytes (map shown bs)) "\n")))))
+
+(def dump (fn (s) (map (fn (k) (row s (* k 16))) (range 0 (ceil (/ (byte-len s) 16))))))
+
+(letv (opts words bad) (getopt ARGS "h")
+  (cond
+    ((not (= bad "")) (do (err-write "xxd: bad option -" bad "\n" usage "\n") (exit-status 2)))
+    ((not (is-empty opts)) (out-write usage "\n"))
+    ((> (length words) 1) (do (err-write usage "\n") (exit-status 2)))
+    ((or (is-empty words) (= (head words) "-")) (dump (in-read)))
+    ((is-nil (file-stat (head words))) (do (err-write "xxd: " (head words) ": No such file\n") (exit-status 1)))
+    (else (dump (read-file (head words))))))

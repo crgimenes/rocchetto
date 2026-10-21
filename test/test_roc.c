@@ -1318,8 +1318,8 @@ static void test_small_commands(void) {
     drain(m);
     send(m, "tree\r"); /* no argument: here */
     o = drain(m);
-    CHECK(strstr(o, "\r\n/bin\r\n├── at\r\n├── ") != NULL);
-    CHECK(strstr(o, "└── xargs\r\n") != NULL);
+    CHECK(strstr(o, "\r\n/bin\r\n├── ansi\r\n├── at\r\n├── ") != NULL);
+    CHECK(strstr(o, "├── xargs\r\n└── xxd\r\n") != NULL);
     send(m, "tree /nope\r");
     o = drain(m);
     CHECK(strstr(o, "rocchetto: tree: ") != NULL);
@@ -3229,6 +3229,106 @@ static bool test_clock(void *ctx, int64_t *secs, int32_t *tz_minutes) {
 
 /* cal, fortune, lolcat, colors: the board's toys, every one with
    a usage for -h. The clock is test_clock's Sunday, 2026-09-27. */
+/* base64, xxd, md5sum and rot13: RFC 4648's vectors, high bytes, every byte there and
+   back, line breaks at 76, and the refusals. */
+static void test_base64_rot13(void) {
+    mock_host h;
+    roc *m = boot(&h);
+    drain(m);
+    util_case(m, "printf '' | base64", "", 0, NULL);
+    util_case(m, "printf f | base64", "Zg==\n", 0, NULL);
+    util_case(m, "printf fo | base64", "Zm8=\n", 0, NULL);
+    util_case(m, "printf foo | base64", "Zm9v\n", 0, NULL);
+    util_case(m, "printf foob | base64", "Zm9vYg==\n", 0, NULL);
+    util_case(m, "printf fooba | base64", "Zm9vYmE=\n", 0, NULL);
+    util_case(m, "printf foobar | base64", "Zm9vYmFy\n", 0, NULL);
+    util_case(m, "printf '\\377\\376' | base64", "//4=\n", 0, NULL);
+    util_case(m, "echo Zm9vYmFy | base64 -d", "foobar", 0, NULL);
+    util_case(m, "printf 'Zm9v\\nYg==\\n' | base64 -d", "foob", 0, NULL);
+    util_case(m, "echo 'Zm9v!' | base64 -d", "", 1, "base64: invalid input");
+    util_case(m, "echo Z | base64 -d", "", 1, "base64: invalid input");
+    uint8_t all[256 * 3];
+    for (size_t i = 0; i < sizeof(all); i++) {
+        all[i] = (uint8_t)(i & 0xffU);
+    }
+    CHECK(roc_write_file(m, "test", "/home/guest/all.bin", all, sizeof(all)));
+    util_case(m, "base64 ~/all.bin | base64 -d > ~/back.bin; cmp ~/all.bin ~/back.bin", "", 0,
+              NULL);
+    util_case(m, "base64 ~/all.bin | wc -l", "14\n", 0, NULL); /* 768 bytes, 57 a line */
+    /* the first line as the system's base64 writes it for the same bytes */
+    util_case(m, "base64 ~/all.bin | head -n 1",
+              "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4\n", 0,
+              NULL);
+    util_case(m, "base64 ~/nope", "", 1, "base64: /home/guest/nope: No such file");
+    util_case(m, "base64 -x", "", 2, "usage: base64");
+    /* xxd: the lines as the system's xxd writes them for the same bytes */
+    util_case(m, "printf 'hello\\n' | xxd",
+              "00000000: 6865 6c6c 6f0a                           hello.\n", 0, NULL);
+    util_case(m, "printf 'Hello, World! 0123456789abcdef\\n' | xxd",
+              "00000000: 4865 6c6c 6f2c 2057 6f72 6c64 2120 3031  Hello, World! 01\n"
+              "00000010: 3233 3435 3637 3839 6162 6364 6566 0a    23456789abcdef.\n",
+              0, NULL);
+    util_case(m, "printf '\\000\\001\\377 x' | xxd",
+              "00000000: 0001 ff20 78                             ... x\n", 0, NULL);
+    util_case(m, "printf '' | xxd", "", 0, NULL);
+    util_case(m, "xxd ~/nope", "", 1, "xxd: /home/guest/nope: No such file");
+    /* md5sum: RFC 1321's vectors, the padding's edges (55, 56, 64 bytes)
+       and the binary file, as the system's md5 tells them */
+    util_case(m, "printf '' | md5sum", "d41d8cd98f00b204e9800998ecf8427e  -\n", 0, NULL);
+    util_case(m, "printf a | md5sum", "0cc175b9c0f1b6a831c399e269772661  -\n", 0, NULL);
+    util_case(m, "printf abc | md5sum", "900150983cd24fb0d6963f7d28e17f72  -\n", 0, NULL);
+    util_case(m, "printf 'message digest' | md5sum", "f96b697d7cb7938d525a2f31aaf161d0  -\n", 0,
+              NULL);
+    util_case(m, "printf abcdefghijklmnopqrstuvwxyz | md5sum",
+              "c3fcd3d76192e4007dfb496cca67e13b  -\n", 0, NULL);
+    util_case(m, "printf %055d 0 | tr 0 a | md5sum", "ef1772b6dff9a122358552954ad0df65  -\n", 0,
+              NULL);
+    util_case(m, "printf %056d 0 | tr 0 a | md5sum", "3b0c8ac703f828b04c6c197006d17218  -\n", 0,
+              NULL);
+    util_case(m, "printf %064d 0 | tr 0 a | md5sum", "014842d480b571495a4a0363793f7367  -\n", 0,
+              NULL);
+    util_case(m, "md5sum ~/all.bin", "e6899eaaf06fd702f3ed3f988eb19362  /home/guest/all.bin\n", 0,
+              NULL);
+    util_case(m, "md5sum ~/nope", "", 1, "md5sum: /home/guest/nope: No such file");
+    util_case(m, "echo 'Hello, World' | rot13", "Uryyb, Jbeyq\n", 0, NULL);
+    util_case(m, "echo 'Why did the chicken?' | rot13 | rot13", "Why did the chicken?\n", 0, NULL);
+    util_case(m, "printf 'caf\\303\\251 Z' | rot13", "pns\xc3\xa9 M", 0, NULL);
+    util_case(m, "rot13 ~/nope", "", 1, "rot13: /home/guest/nope: No such file");
+}
+
+/* ansi: CP437 art turned into UTF-8 with its escapes kept, cut at ^Z
+   before its SAUCE record, which -i tells; UTF-8 art as it is. */
+static void test_ansi_art(void) {
+    mock_host h;
+    roc *m = boot(&h);
+    drain(m);
+    uint8_t art[64 + 128];
+    static const char body[] = "\xdb\xb0\x1b[31mhi\x01\r\n\x1a";
+    size_t n = sizeof(body) - 1;
+    memcpy(art, body, n);
+    uint8_t *sauce = art + n;
+    memset(sauce, ' ', 128);
+    memcpy(sauce, "SAUCE00", 7);
+    memcpy(sauce + 7, "Night lake", 10);
+    memcpy(sauce + 42, "crg", 3);
+    memcpy(sauce + 62, "nox", 3);
+    memcpy(sauce + 82, "20261021", 8);
+    memset(sauce + 90, 0, 38);
+    sauce[96] = 80; /* the width, little end first */
+    CHECK(roc_write_file(m, "test", "/home/guest/a.ans", art, n + 128));
+    util_case(m, "ansi ~/a.ans", "\xe2\x96\x88\xe2\x96\x91\x1b[31mhi\xe2\x98\xba\r\n\x1b[0m", 0,
+              NULL);
+    util_case(m, "ansi -i ~/a.ans",
+              "Title:  Night lake\nAuthor: crg\nGroup:  nox\nDate:   20261021\nWidth:  80\n", 0,
+              NULL);
+    util_case(m, "printf '\\342\\226\\210 x' | ansi", "\xe2\x96\x88 x\x1b[0m", 0, NULL);
+    util_case(m, "printf 'plain' | ansi -i", "no SAUCE record\n", 0, NULL);
+    util_case(m, "printf '\\333\\260' | ansi", "\xdb\xb0\x1b[0m", 0, NULL); /* valid UTF-8 */
+    util_case(m, "printf '\\333\\260' | ansi -c", "\xe2\x96\x88\xe2\x96\x91\x1b[0m", 0, NULL);
+    util_case(m, "ansi ~/nope", "", 1, "ansi: /home/guest/nope: No such file");
+    util_case(m, "ansi -z", "", 2, "usage: ansi");
+}
+
 static void test_fun_commands(void) {
     mock_host h;
     roc *m = boot(&h);
@@ -8617,6 +8717,8 @@ static void roc_tests(void) {
     RUN(test_shell_textutils);
     RUN(test_shell_trap_type_date);
     RUN(test_fun_commands);
+    RUN(test_base64_rot13);
+    RUN(test_ansi_art);
     RUN(test_shell_subshells);
     RUN(test_shell_ifs_alias);
     RUN(test_tools_scratch);

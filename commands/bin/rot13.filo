@@ -1,0 +1,24 @@
+; rot13 [file...]: each latin letter thirteen places on, the rest as it
+; came; twice is the text again. A file of - (or none) is what a | hands
+; over.
+
+(def usage "usage: rot13 [file...]\nEach letter A to Z thirteen places on, the way Usenet hid a spoiler; twice gives the text back.")
+
+(def turn (fn (c)
+  (cond ((and (>= c 65) (<= c 90)) (+ 65 (% (+ (- c 65) 13) 26)))
+        ((and (>= c 97) (<= c 122)) (+ 97 (% (+ (- c 97) 13) 26)))
+        (else c))))
+
+(def rot (fn (s) (out-write (bytes (map turn (byte-list s))))))
+
+(letv (opts words bad) (getopt ARGS "h")
+  (cond
+    ((not (= bad "")) (do (err-write "rot13: bad option -" bad "\n" usage "\n") (exit-status 2)))
+    ((not (is-empty opts)) (out-write usage "\n"))
+    ((is-empty words) (rot (in-read)))
+    (else
+      (map (fn (w)
+             (cond ((= w "-") (rot (in-read)))
+                   ((is-nil (file-stat w)) (do (err-write "rot13: " w ": No such file\n") (exit-status 1)))
+                   (else (rot (read-file w)))))
+           words))))

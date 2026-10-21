@@ -1,0 +1,72 @@
+; md5sum [file...]: the MD5 of each file (or of what a | hands over, as -),
+; one line each, "hash  name", as coreutils writes it. RFC 1321 in 32-bit
+; words; MD5 tells copies apart, it does not keep secrets.
+
+(def usage "usage: md5sum [file...]\nThe MD5 digest of each file, or of what a | hands over (-), as hash  name.")
+
+(def K (list 3614090360 3905402710 606105819 3250441966 4118548399 1200080426 2821735955 4249261313
+             1770035416 2336552879 4294925233 2304563134 1804603682 4254626195 2792965006 1236535329
+             4129170786 3225465664 643717713 3921069994 3593408605 38016083 3634488961 3889429448
+             568446438 3275163606 4107603335 1163531501 2850285829 4243563512 1735328473 2368359562
+             4294588738 2272392833 1839030562 4259657740 2763975236 1272893353 4139469664 3200236656
+             681279174 3936430074 3572445317 76029189 3654602809 3873151461 530742520 3299628645
+             4096336452 1126891415 2878612391 4237533241 1700485571 2399980690 4293915773 2240044497
+             1873313359 4264355552 2734768916 1309151649 4149444226 3174756917 718787259 3951481745))
+(def SHIFTS (list 7 12 17 22 5 9 14 20 4 11 16 23 6 10 15 21))
+
+(def rotl (fn (x c) (u32-or (u32-shl x c) (u32-shr x (- 32 c)))))
+(def word (fn (s at) (+ (byte-at s at) (* 256 (byte-at s (+ at 1))) (* 65536 (byte-at s (+ at 2))) (* 16777216 (byte-at s (+ at 3))))))
+(def le-bytes (fn (n) (bytes (map (fn (k) (% (floor (/ n (pow 256 k))) 256)) (range 0 4)))))
+
+; the message padded to whole 64-byte blocks: 0x80, zeros, the length in bits
+(def padded (fn (s)
+  (let ((len (byte-len s)))
+    (let ((zeros (% (- 55 len) 64)))
+      (str-concat s (bytes 128) (bytes (map (fn (i) 0) (range 0 (if (< zeros 0) (+ zeros 64) zeros))))
+                  (le-bytes (% (* len 8) 4294967296)) (le-bytes (floor (/ (* len 8) 4294967296))))))))
+
+; one block from at into the state (a b c d)
+(def block (fn (s at st)
+  (let ((m (map (fn (j) (word s (+ at (* 4 j)))) (range 0 16))))
+    (letv (a b c d)
+          (fold (fn (r i)
+                  (letv (a b c d) r
+                    (let ((q (floor (/ i 16))))
+                      (let ((f (cond ((= q 0) (u32-or (u32-and b c) (u32-and (u32-not b) d)))
+                                     ((= q 1) (u32-or (u32-and d b) (u32-and (u32-not d) c)))
+                                     ((= q 2) (u32-xor b (u32-xor c d)))
+                                     (else (u32-xor c (u32-or b (u32-not d))))))
+                            (g (cond ((= q 0) i)
+                                     ((= q 1) (% (+ (* 5 i) 1) 16))
+                                     ((= q 2) (% (+ (* 3 i) 5) 16))
+                                     (else (% (* 7 i) 16)))))
+                        (tuple d
+                               (u32-add b (rotl (u32-add (u32-add f a) (u32-add (nth K i) (nth m g)))
+                                                (nth SHIFTS (+ (* q 4) (% i 4)))))
+                               b c)))))
+                st (range 0 64))
+      (letv (a0 b0 c0 d0) st (tuple (u32-add a0 a) (u32-add b0 b) (u32-add c0 c) (u32-add d0 d)))))))
+
+(def hex-le (fn (n) (str-join "" (map (fn (k) (let ((t (int-text (% (floor (/ n (pow 256 k))) 256) 16)))
+                                                (if (< (byte-len t) 2) (str-concat "0" t) t)))
+                                      (range 0 4)))))
+
+(def md5 (fn (s)
+  (let ((p (padded s)))
+    (letv (a b c d)
+          (fold (fn (st k) (block p (* k 64) st))
+                (tuple 1732584193 4023233417 2562383102 271733878)
+                (range 0 (/ (byte-len p) 64)))
+      (str-concat (hex-le a) (hex-le b) (hex-le c) (hex-le d))))))
+
+(letv (opts words bad) (getopt ARGS "h")
+  (cond
+    ((not (= bad "")) (do (err-write "md5sum: bad option -" bad "\n" usage "\n") (exit-status 2)))
+    ((not (is-empty opts)) (out-write usage "\n"))
+    ((is-empty words) (out-write (md5 (in-read)) "  -\n"))
+    (else
+      (map (fn (w)
+             (cond ((= w "-") (out-write (md5 (in-read)) "  -\n"))
+                   ((is-nil (file-stat w)) (do (err-write "md5sum: " w ": No such file\n") (exit-status 1)))
+                   (else (out-write (md5 (read-file w)) "  " w "\n"))))
+           words))))

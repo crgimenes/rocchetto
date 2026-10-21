@@ -32,7 +32,8 @@ rocchetto, a POSIX shell with its utilities written in Filo. Here in the pager, 
 - `sed <script> [<file>]` — edit lines as they pass (`sed 's/old/new/g'`, `sed -n '/re/p'`, `-i` for a file of yours)
 - `diff [-u] <file> <file>` — what changed between two files, as diff writes it (`-u` the unified way); `-` is what a `|` hands over
 - `tr`, `cut`, `tee`, `paste`, `join`, `comm`, `nl`, `fold`, `expand`, `unexpand`, `basename`, `dirname` — text for scripts and pipes
-- `seq`, `cmp`, `od`, `cksum` — numbers one a line, two files compared, the bytes shown, a checksum
+- `seq`, `cmp`, `od`, `cksum`, `md5sum` — numbers one a line, two files compared, the bytes shown, a checksum, an MD5
+- `base64 [-d] [file]`, `xxd [file]`, `rot13 [file...]` — bytes as text and back, bytes in hex; letters turned thirteen places, twice is the text again
 - `split [-l lines | -b bytes] [file [prefix]]` — a file cut into pieces xaa, xab...
 - `pr [-columns] [-h header] [-l lines] [-tdn] [file]` — pages with a header, in columns too
 - `tsort [file]` — words two by two, "a b" a before b, put in an order that keeps them all
@@ -75,6 +76,7 @@ The shell carries its own files: the programs behind commands like this one live
 - `ver` — the version of this shell
 - `whoami`, `hostname`, `uname [-a]`, `logname` — who and where you are, what system this is
 - `fortune` — a saying from the old days of computing
+- `ansi [-ci] [file]` — ANSI art from the BBS days (CP437, or UTF-8) on the terminal; `-i` tells its SAUCE: title, author, group
 - `colors` — the terminal's 256 colours with their numbers; `lolcat [file...]` paints text in a rainbow (`fortune | lolcat`)
 - `clear` — clear screen
 - `exit` — leave the shell

@@ -1,0 +1,74 @@
+; ansi [-ci] [file]: ANSI art on the terminal. A file in CP437 (the PC's
+; character set, what the scene drew with) is turned into UTF-8; one that
+; already is UTF-8 passes as it is. A SAUCE record says CP437 (it is the
+; scene's format, and a short CP437 file can read as valid UTF-8: DB B0 is
+; one character there); with none, valid UTF-8 is taken as such; -c says
+; CP437 whatever the bytes look like. Its escapes go through, the art ends at
+; ^Z, and the SAUCE record after it (title, author, group) is not drawn: -i
+; tells it instead. The colours are reset at the end.
+
+(def usage "usage: ansi [-ci] [file]\nANSI art from CP437 (or UTF-8) on the terminal; -c takes it as CP437, -i shows its SAUCE: title, author, group, date, width.")
+
+; CP437 as code points: the glyphs of 1 to 31, then 127 to 255
+(def LOW (list 32 9786 9787 9829 9830 9827 9824 8226 9688 9675 9689 9794 9792 9834 9835 9788
+               9658 9668 8597 8252 182 167 9644 8616 8593 8595 8594 8592 8735 8596 9650 9660))
+(def HIGH (list 8962
+  199 252 233 226 228 224 229 231 234 235 232 239 238 236 196 197
+  201 230 198 244 246 242 251 249 255 214 220 162 163 165 8359 402
+  225 237 243 250 241 209 170 186 191 8976 172 189 188 161 171 187
+  9617 9618 9619 9474 9508 9569 9570 9558 9557 9571 9553 9559 9565 9564 9563 9488
+  9492 9524 9516 9500 9472 9532 9566 9567 9562 9556 9577 9574 9568 9552 9580 9575
+  9576 9572 9573 9561 9560 9554 9555 9579 9578 9496 9484 9608 9604 9612 9616 9600
+  945 223 915 960 931 963 181 964 934 920 937 948 8734 966 949 8745
+  8801 177 8805 8804 8992 8993 247 8776 176 8729 183 8730 8319 178 9632 32))
+
+; one byte as text: tab, line feed, carriage return and escape stay what
+; they are; the rest is the glyph CP437 draws for it
+(def glyph (fn (b)
+  (cond ((or (= b 9) (= b 10) (= b 13) (= b 27)) (bytes b))
+        ((< b 32) (utf8-encode (nth LOW b)))
+        ((< b 127) (bytes b))
+        (else (utf8-encode (nth HIGH (- b 127)))))))
+
+; the art: up to ^Z, or up to the SAUCE record when there is no ^Z
+(def art-of (fn (s)
+  (let ((eof (byte-find s (bytes 26))))
+    (if (>= eof 0)
+      (byte-sub s 0 eof)
+      (if (has-sauce s) (byte-sub s 0 (- (byte-len s) 128)) s)))))
+
+(def has-sauce (fn (s) (and (>= (byte-len s) 128) (= (byte-sub s (- (byte-len s) 128) (- (byte-len s) 121)) "SAUCE00"))))
+
+(def text (fn (s cp437)
+  (if (and (not cp437) (utf8-valid s))
+    s
+    (str-join "" (map glyph (byte-list s))))))
+
+; a SAUCE field: its bytes from at, n long, without the padding
+(def field (fn (s at n)
+  (str-trim (str-join "" (map (fn (b) (if (or (= b 0) (< b 32)) " " (glyph b))) (byte-list (byte-sub s at (+ at n))))))))
+
+(def info (fn (s)
+  (if (not (has-sauce s))
+    (out-write "no SAUCE record\n")
+    (let ((at (- (byte-len s) 128)))
+      (out-write "Title:  " (field s (+ at 7) 35) "\n"
+                 "Author: " (field s (+ at 42) 20) "\n"
+                 "Group:  " (field s (+ at 62) 20) "\n"
+                 "Date:   " (field s (+ at 82) 8) "\n"
+                 "Width:  " (int-text (+ (byte-at s (+ at 96)) (* 256 (byte-at s (+ at 97))))) "\n")))))
+
+(letv (opts words bad) (getopt ARGS "cih")
+  (let ((flags (map (fn (o) (letv (l v) o l)) opts)))
+    (cond
+      ((not (= bad "")) (do (err-write "ansi: bad option -" bad "\n" usage "\n") (exit-status 2)))
+      ((not (is-empty (filter (fn (f) (= f "h")) flags))) (out-write usage "\n"))
+      ((> (length words) 1) (do (err-write usage "\n") (exit-status 2)))
+      ((and (not (is-empty words)) (not (= (head words) "-")) (is-nil (file-stat (head words))))
+        (do (err-write "ansi: " (head words) ": No such file\n") (exit-status 1)))
+      (else
+        (let ((s (if (or (is-empty words) (= (head words) "-")) (in-read) (read-file (head words)))))
+          (if (is-empty (filter (fn (f) (= f "i")) flags))
+            (out-write (text (art-of s) (or (has-sauce s) (not (is-empty (filter (fn (f) (= f "c")) flags)))))
+                       (sgr 0))
+            (info s)))))))
