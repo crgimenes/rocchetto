@@ -68,7 +68,7 @@ APPSRC = $(if $(filter 1,$(APPS_SCREENS)),$(APP_SCREENS)) \
 # builds without them (small, esp32) take none.
 EXTEND_SRC ?= $(ROC)/host/extend_none.c
 LAYER_SRC ?=
-BASE = $(EXTEND_SRC) $(addprefix $(ROC)/src/,roc.c cmds.c script.c script_data.c fsmeta.c fileh.c sh.c tree.c vfs.c ufs.c home.c ed.c printf.c regex.c) \
+BASE = $(EXTEND_SRC) $(addprefix $(ROC)/src/,roc.c cmds.c script.c script_data.c fsmeta.c fileh.c sh.c tree.c vfs.c ufs.c home.c ed.c printf.c regex.c qr.c) \
 	$(addprefix $(TERM_SRC)/,keyin.c canvas.c md.c hl.c pager.c term.c utf8.c tbuf.c)
 CORE = $(BASE) $(APPSRC) $(LAYER_SRC)
 HDRS = build/version.h $(FILO)/filo.h $(wildcard $(ROC)/src/*.h) $(CW_SRC)/mars.h $(CW_SRC)/arena.h \

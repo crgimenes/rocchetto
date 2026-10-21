@@ -77,6 +77,8 @@ The shell carries its own files: the programs behind commands like this one live
 - `whoami`, `hostname`, `uname [-a]`, `logname` — who and where you are, what system this is
 - `fortune` — a saying from the old days of computing
 - `ansi [-ci] [file]` — ANSI art from the BBS days (CP437, or UTF-8) on the terminal; `-i` tells its SAUCE: title, author, group
+- `figlet [-g] [-w width] [text...]` — the text in big letters of half blocks (`figlet -g hello`, `echo hi | figlet`)
+- `qr [-t] [text...]` — the text as a QR code a phone reads off the screen (`qr https://crg.eti.br`), up to 106 bytes
 - `colors` — the terminal's 256 colours with their numbers; `lolcat [file...]` paints text in a rainbow (`fortune | lolcat`)
 - `clear` — clear screen
 - `exit` — leave the shell

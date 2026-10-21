@@ -50,7 +50,10 @@ static bool path_join(char *dst, size_t cap, const char *dir, const char *file) 
 
 /* Drops a piece of ANSI art into the canvas at a position. The file is read
    from the screen's own directory, or from the root of the tree, and lands as
-   a fragment: clipped at the edges, and unable to erase what is around it. */
+   a fragment: clipped at the edges, and unable to erase what is around it.
+   The position may be off the screen (above, to the left): that is how art
+   larger than the screen is scrolled. The answer is (rows cols), the size the
+   art drew, clipped or not. */
 static int b_blit(filo_ctx *ctx, const filo_value *a, uint32_t n, filo_value *out) {
     if (n != 3) {
         return filo_fail(ctx, "blit expects a row, a column and a file");
@@ -81,8 +84,8 @@ static int b_blit(filo_ctx *ctx, const filo_value *a, uint32_t n, filo_value *ou
     cv_capture cap;
     cv_capture_begin_at(&cap, &m->cmp.target, row, col);
     cv_capture_feed(&cap, data, len);
-    *out = filo_bool(true);
-    return FILO_OK;
+    filo_value size[2] = {filo_num(cap.rows), filo_num(cap.cols)};
+    return filo_tuple(ctx, size, 2, out);
 }
 
 /* random: a whole number in [0, n). It is a builtin of the shell and not

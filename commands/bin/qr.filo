@@ -1,0 +1,54 @@
+; qr [-t] [text...]: the text (or what a | hands over, its last line break
+; dropped) as a QR code a phone's camera reads off the screen: two modules a
+; character in half blocks, black on white whatever the terminal's colours,
+; with a margin. Up to 106 bytes (level M, versions 1 to 6). -t writes the
+; modules as # and . instead, a row a line.
+
+(def usage "usage: qr [-t] [text...]\nThe text as a QR code to read with a phone (up to 106 bytes); -t writes its modules as # and .")
+(def DARK 16)
+(def LIGHT 231)
+(def MARGIN 2)
+
+(def bit (fn (row c) (if (and (>= c 0) (< c (str-len row))) (= (str-sub row c (+ c 1)) "1") #f)))
+
+; the rows with the margin round them, as strings of 1 and 0
+(def framed
+  (fn (rows)
+    (let ((blank (str-join "" (map (fn (i) "0") (range 0 (+ (str-len (head rows)) (* 2 MARGIN))))))
+          (side (str-join "" (map (fn (i) "0") (range 0 MARGIN)))))
+      (list-concat (map (fn (i) blank) (range 0 MARGIN))
+                   (map (fn (r) (str-concat side r side)) rows)
+                   (map (fn (i) blank) (range 0 MARGIN))))))
+
+(def colour (fn (dark) (if dark DARK LIGHT)))
+
+(def draw
+  (fn (rows)
+    (let ((all (framed rows)))
+      (map
+        (fn (k)
+          (let ((top (nth all (* k 2)))
+                (bottom (if (< (+ (* k 2) 1) (length all)) (nth all (+ (* k 2) 1)) "")))
+            (out-write
+              (str-join "" (map (fn (c) (str-concat (sgr 38 5 (colour (bit top c)) 48 5 (colour (bit bottom c))) "▀"))
+                                (range 0 (str-len top))))
+              (sgr 0) "\n")))
+        (range 0 (ceil (/ (length all) 2)))))))
+
+(def text-of (fn (rows) (map (fn (r) (out-write (str-replace "0" "." (str-replace "1" "#" r)) "\n")) rows)))
+
+(def without-nl (fn (s) (if (= (byte-sub s (- (byte-len s) 1)) "\n") (byte-sub s 0 (- (byte-len s) 1)) s)))
+
+(letv (opts words bad) (getopt ARGS "ht")
+  (let ((flags (map (fn (o) (letv (l v) o l)) opts)))
+    (let ((text (if (is-empty words) (without-nl (in-read)) (str-join " " words))))
+      (cond
+        ((not (= bad "")) (do (err-write "qr: bad option -" bad "\n" usage "\n") (exit-status 2)))
+        ((not (is-empty (filter (fn (f) (= f "h")) flags))) (out-write usage "\n"))
+        ((= (byte-len text) 0) (do (err-write "qr: nothing to encode\n" usage "\n") (exit-status 2)))
+        (else
+          (let ((rows (qr-encode text)))
+            (cond
+              ((is-nil rows) (do (err-write "qr: at most 106 bytes\n") (exit-status 1)))
+              ((not (is-empty (filter (fn (f) (= f "t")) flags))) (text-of rows))
+              (else (draw rows)))))))))

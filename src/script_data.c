@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "home.h"
+#include "qr.h"
 #include "regex.h"
 #include "roc.h"
 #include "utf8.h"
@@ -178,6 +179,33 @@ static int b_bytes(filo_ctx *ctx, const filo_value *a, uint32_t n, filo_value *o
     }
     *out = filo_string(mem, (uint32_t)k);
     return FILO_OK;
+}
+
+/* (qr-encode s): the QR code of the bytes of s (level M, up to 106 bytes)
+   as its rows, each a string of 1 (dark) and 0; nil when s is too long. */
+static int b_qr_encode(filo_ctx *ctx, const filo_value *a, uint32_t n, filo_value *out) {
+    if (n != 1 || want_string(ctx, &a[0], "qr-encode") != FILO_OK) {
+        return n != 1 ? filo_fail(ctx, "qr-encode expects a string") : FILO_ERR;
+    }
+    static uint8_t m[QR_SIZE_MAX][QR_SIZE_MAX];
+    int size = qr_encode(a[0].u.str.ptr, a[0].u.str.len, m);
+    if (size == 0) {
+        *out = nil_value();
+        return FILO_OK;
+    }
+    filo_value *rows = filo_alloc(ctx, (size_t)size * sizeof(filo_value));
+    uint8_t *text = filo_alloc(ctx, (size_t)size * (size_t)size);
+    if (rows == NULL || text == NULL) {
+        return filo_fail(ctx, "qr-encode: out of memory");
+    }
+    for (int r = 0; r < size; r++) {
+        uint8_t *line = text + ((size_t)r * (size_t)size);
+        for (int c = 0; c < size; c++) {
+            line[c] = m[r][c] != 0 ? '1' : '0';
+        }
+        rows[r] = filo_string(line, (uint32_t)size);
+    }
+    return filo_list(ctx, rows, (uint32_t)size, out);
 }
 
 /* (byte-list s): the bytes of s as numbers 0..255. */
@@ -1395,6 +1423,7 @@ const script_builtin script_data_builtins[] = {
     {"env-get", b_env_get},
     {"env-list", b_env_list},
     {"now", b_now},
+    {"qr-encode", b_qr_encode},
     {"glob-match", b_glob_match},
     {"path-resolve", b_path_resolve},
     {"file-stat", b_file_stat},

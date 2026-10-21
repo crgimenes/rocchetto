@@ -3329,6 +3329,81 @@ static void test_ansi_art(void) {
     util_case(m, "ansi -z", "", 2, "usage: ansi");
 }
 
+/* figlet: two rows of half blocks a line, the board's letters (crg.eti.br
+   comes out as its small logo); words broken at -w; -g in ember; a letter
+   with no shape a question mark; the input's lines when there is no text. */
+static void test_figlet(void) {
+    mock_host h;
+    roc *m = boot(&h);
+    drain(m);
+    util_case(
+        m, "figlet crg.eti.br",
+        "\xe2\x96\x88\xe2\x96\x80\xe2\x96\x80 \xe2\x96\x88\xe2\x96\x80\xe2\x96\x88 "
+        "\xe2\x96\x88\xe2\x96\x80\xe2\x96\x80   "
+        "\xe2\x96\x88\xe2\x96\x80\xe2\x96\x80 \xe2\x96\x80\xe2\x96\x88\xe2\x96\x80 \xe2\x96\x88   "
+        "\xe2\x96\x88\xe2\x96\x84\xe2\x96\x84 \xe2\x96\x88\xe2\x96\x80\xe2\x96\x88\n"
+        "\xe2\x96\x88\xe2\x96\x84\xe2\x96\x84 \xe2\x96\x88\xe2\x96\x80\xe2\x96\x84 "
+        "\xe2\x96\x88\xe2\x96\x84\xe2\x96\x88 "
+        "\xe2\x96\x84 \xe2\x96\x88\xe2\x96\x88\xe2\x96\x84  \xe2\x96\x88  \xe2\x96\x88 "
+        "\xe2\x96\x84 "
+        "\xe2\x96\x88\xe2\x96\x84\xe2\x96\x88 \xe2\x96\x88\xe2\x96\x80\xe2\x96\x84\n",
+        0, NULL);
+    /* "h i" at four columns is two rows of letters, a blank line between */
+    util_case(m, "figlet -w 4 h i",
+              "\xe2\x96\x88 "
+              "\xe2\x96\x88\n\xe2\x96\x88\xe2\x96\x80\xe2\x96\x88\n\n\xe2\x96\x88\n\xe2\x96\x88\n",
+              0, NULL);
+    util_case(m, "figlet '~'", "\xe2\x96\x80\xe2\x96\x80\xe2\x96\x88\n \xe2\x96\x84 \n", 0, NULL);
+    util_case(m, "printf 'i\\n\\ni\\n' | figlet | wc -l", "4\n", 0, NULL);
+    util_case(m, "figlet -g i | grep -c '38;5;230m'", "2\n", 0, NULL);
+    util_case(m, "figlet -w x i", "", 2, "figlet: -w takes a width");
+    util_case(m, "figlet -z i", "", 2, "usage: figlet");
+}
+
+/* qr: the modules of HELLO as the encoder lays them (the same matrix Apple's
+   Vision read back as HELLO when this was written: versions 1 to 6, UTF-8
+   and 106 bytes were read too); a version per length, the limit, and the
+   picture in black and white half blocks with a margin. */
+static void test_qr(void) {
+    mock_host h;
+    roc *m = boot(&h);
+    drain(m);
+    util_case(m, "qr -t HELLO",
+              "#######.##.#..#######\n"
+              "#.....#..##.#.#.....#\n"
+              "#.###.#..####.#.###.#\n"
+              "#.###.#.#..#..#.###.#\n"
+              "#.###.#.#...#.#.###.#\n"
+              "#.....#.#.##..#.....#\n"
+              "#######.#.#.#.#######\n"
+              "........#####........\n"
+              "#...#.######.#####..#\n"
+              "...###..#.###..#.####\n"
+              "#.##..#.#.##..###..#.\n"
+              "###..#...#...##.#....\n"
+              "..#.###..#..###...##.\n"
+              "........###.###..#.##\n"
+              "#######.##..##...#.#.\n"
+              "#.....#....##..#...#.\n"
+              "#.###.#.#..#..###.#.#\n"
+              "#.###.#....##....#.##\n"
+              "#.###.#..###..####...\n"
+              "#.....#..#...##......\n"
+              "#######.#...#####.#.#\n",
+              0, NULL);
+    util_case(m, "qr -t https://crg.eti.br | wc -l", "25\n", 0, NULL);
+    util_case(m, "printf %0106d 0 | qr -t | wc -l", "41\n", 0, NULL);
+    util_case(m, "printf %0107d 0 | qr", "", 1, "qr: at most 106 bytes");
+    /* the input's line break is not encoded: hi, with or without it */
+    util_case(m,
+              "echo hi | qr -t > ~/q1; qr -t hi > ~/q2; cmp ~/q1 ~/q2 && head -n 1 ~/q1 | grep -c "
+              "'^#######.*#######$'",
+              "1\n", 0, NULL);
+    util_case(m, "qr hi | wc -l", "13\n", 0, NULL); /* 21 + 4 margin, two a line */
+    util_case(m, "qr hi | head -n 1 | grep -c '38;5;231;48;5;231m'", "1\n", 0, NULL);
+    util_case(m, "printf '' | qr", "", 2, "qr: nothing to encode");
+}
+
 static void test_fun_commands(void) {
     mock_host h;
     roc *m = boot(&h);
@@ -8009,6 +8084,31 @@ static void test_screen_loads_from_the_tree(void) {
     tree_set_source(NULL, 0);
 }
 
+/* Art larger than the screen scrolls by being dropped above or to the left
+   of it: blit takes a position off the screen, clips what falls outside, and
+   answers the size the art drew. The fixture's art is two rows: ten cells,
+   then ten, a gap of two, and two more. */
+static void test_blit_off_screen_and_size(void) {
+    mock_host h;
+    roc *m = boot_menu(&h);
+    drain(m);
+    fixture_screen(m);
+    CHECK(screen_load(m, "fix"));
+    const char *src = "(letv (rows cols) (blit -1 -3 \"art.ans\")\n"
+                      "  (print-at 5 0 (str-fmt \"%dx%d\" rows cols)))";
+    CHECK(screen_set_draw(m, (const uint8_t *)src, strlen(src)));
+    CHECK(screen_paint(m));
+    CHECK(screen_error(m)[0] == '\0');
+    const canvas *c = &m->cmp.target; /* SGR 102 is bright green: colour 10 */
+    CHECK(strstr(canvas_row(c, 5), "2x14") != NULL);
+    CHECK(c->cells[0][0].bg == 10 && c->cells[0][6].bg == 10); /* row 1, from its fourth cell */
+    CHECK(c->cells[0][7].bg != 10 && c->cells[0][8].bg != 10); /* the gap */
+    CHECK(c->cells[0][9].bg == 10 && c->cells[0][10].bg == 10);
+    CHECK(c->cells[0][11].bg != 10);
+    CHECK(c->cells[1][0].bg != 10); /* nothing below the art */
+    tree_set_source(NULL, 0);
+}
+
 /* The globals are closed once init has run, so a name typed wrong in a hook
    cannot reach the user: it fails while the screen is loading. */
 static void test_screen_seals_its_globals(void) {
@@ -8719,6 +8819,8 @@ static void roc_tests(void) {
     RUN(test_fun_commands);
     RUN(test_base64_rot13);
     RUN(test_ansi_art);
+    RUN(test_figlet);
+    RUN(test_qr);
     RUN(test_shell_subshells);
     RUN(test_shell_ifs_alias);
     RUN(test_tools_scratch);
@@ -8795,6 +8897,7 @@ static void roc_tests(void) {
     RUN(test_missing_screen_names_its_init);
     RUN(test_screen_kit_runs_before_common);
     RUN(test_screen_loads_from_the_tree);
+    RUN(test_blit_off_screen_and_size);
     RUN(test_screen_seals_its_globals);
     RUN(test_screen_key_hook_and_navigation);
     RUN(test_screen_load_failures_are_named);
