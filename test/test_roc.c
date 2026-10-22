@@ -3,6 +3,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include "../src/roc.h"
 
@@ -8762,6 +8764,463 @@ static void test_notice(void) {
     CHECK(strcmp(m->t.note, "a note") == 0);
 }
 
+/* ---- the host's storage, live: a directory on the disk mounted at
+   disk_mount, changed under the session as another window or the Files app
+   would ---- */
+
+static char disk_root[512];
+static const char *disk_mount = "/home/guest";
+
+static bool disk_path(const char *path, char *out, size_t cap) {
+    size_t n = strcmp(disk_mount, "/") == 0 ? 0 : strlen(disk_mount);
+    if (strncmp(path, disk_mount, n) != 0 || (path[n] != '/' && path[n] != '\0')) {
+        return false;
+    }
+    int k = snprintf(out, cap, "%s%s", disk_root, path + n);
+    return k > 0 && (size_t)k < cap;
+}
+
+static int disk_stat(void *ctx, const char *path, bool follow, roc_stat *st) {
+    (void)ctx;
+    char full[1024];
+    if (!disk_path(path, full, sizeof(full))) {
+        return ROC_HOST_NOT_MINE;
+    }
+    struct stat s;
+    if ((follow ? stat(full, &s) : lstat(full, &s)) != 0) {
+        return ROC_HOST_NO;
+    }
+    memset(st, 0, sizeof(*st));
+    st->dir = S_ISDIR(s.st_mode);
+    st->link = S_ISLNK(s.st_mode);
+    st->has_size = S_ISREG(s.st_mode);
+    st->size = (uint64_t)s.st_size;
+    return ROC_HOST_YES;
+}
+
+static int disk_list(void *ctx, const char *dir, roc_dir_each each, void *user) {
+    (void)ctx;
+    char full[1024];
+    if (!disk_path(dir, full, sizeof(full))) {
+        return ROC_HOST_NOT_MINE;
+    }
+    DIR *d = opendir(full);
+    if (d == NULL) {
+        return ROC_HOST_NO;
+    }
+    const struct dirent *e = readdir(d);
+    while (e != NULL) {
+        char sub[1400];
+        struct stat s;
+        if (strcmp(e->d_name, ".") != 0 && strcmp(e->d_name, "..") != 0 &&
+            snprintf(sub, sizeof(sub), "%s/%s", full, e->d_name) > 0 && lstat(sub, &s) == 0) {
+            each(user, e->d_name, S_ISDIR(s.st_mode), S_ISLNK(s.st_mode));
+        }
+        e = readdir(d);
+    }
+    (void)closedir(d);
+    return ROC_HOST_YES;
+}
+
+static const char *disk_at(const char *rel) {
+    static char full[1024];
+    (void)snprintf(full, sizeof(full), "%s/%s", disk_root, rel);
+    return full;
+}
+
+static void disk_put(const char *rel, const char *body) {
+    FILE *f = fopen(disk_at(rel), "wb");
+    CHECK(f != NULL);
+    if (f != NULL) {
+        CHECK(fwrite(body, 1, strlen(body), f) == strlen(body));
+        CHECK(fclose(f) == 0);
+    }
+}
+
+static void disk_rm(const char *full) {
+    struct stat s;
+    if (lstat(full, &s) != 0) {
+        return;
+    }
+    if (!S_ISDIR(s.st_mode)) {
+        CHECK(unlink(full) == 0);
+        return;
+    }
+    DIR *d = opendir(full);
+    const struct dirent *e = d != NULL ? readdir(d) : NULL;
+    while (e != NULL) {
+        char sub[1400];
+        if (strcmp(e->d_name, ".") != 0 && strcmp(e->d_name, "..") != 0 &&
+            snprintf(sub, sizeof(sub), "%s/%s", full, e->d_name) > 0) {
+            disk_rm(sub);
+        }
+        e = readdir(d);
+    }
+    if (d != NULL) {
+        (void)closedir(d);
+    }
+    CHECK(rmdir(full) == 0);
+}
+
+static roc *boot_disk(mock_host *h) {
+    const char *tmp = getenv("TMPDIR");
+    (void)snprintf(disk_root, sizeof(disk_root), "%s/roc-disk-XXXXXX",
+                   tmp != NULL && tmp[0] != '\0' ? tmp : "/tmp");
+    CHECK(mkdtemp(disk_root) != NULL);
+    disk_mount = "/home/guest";
+    memset(h, 0, sizeof(*h));
+    roc_host host = {.filo_extend = roc_host_extend,
+                     .ctx = h,
+                     .host_name = "shell.test",
+                     .request = mock_request,
+                     .scratch = mock_scratch,
+                     .file_stat = disk_stat,
+                     .dir_list = disk_list};
+    roc_init(&M, &host, 80, 24, ROC_F_PROMPT);
+    roc_feed(&M, h->req_id, (const uint8_t *)test_index, strlen(test_index));
+    roc_feed_eof(&M, h->req_id);
+    drain(&M);
+    return &M;
+}
+
+static bool indexed(roc *m, const char *path) {
+    return vfs_lookup(&m->fs, path) != NULL;
+}
+
+/* roc_lookup brings one entry to what the disk says now: one the index
+   never had, a size or a kind that changed, one gone; what cannot go (a
+   directory with entries under it, ~/.history) stays, and what the host
+   does not keep is the index's. */
+static void test_lookup_follows_the_disk(void) {
+    mock_host h;
+    roc *m = boot_disk(&h);
+    CHECK(mkdir(disk_at("d"), 0700) == 0 && mkdir(disk_at("d/e"), 0700) == 0);
+    disk_put("a.txt", "hello");
+    disk_put("d/e/f.txt", "123456");
+    CHECK(!indexed(m, "/home/guest/a.txt"));
+    const vfs_node *node = roc_lookup(m, "/home/guest/a.txt");
+    CHECK(node != NULL && !node->dir && node->size == 5);
+    node = roc_lookup(m, "/home/guest/d/e/f.txt");
+    CHECK(node != NULL && !node->dir && node->size == 6);
+    node = vfs_lookup(&m->fs, "/home/guest/d/e");
+    CHECK(node != NULL && node->dir); /* the way there came with it */
+    CHECK(roc_lookup(m, "/home/guest/nope") == NULL && !indexed(m, "/home/guest/nope"));
+
+    disk_put("a.txt", "hello, world");
+    node = roc_lookup(m, "/home/guest/a.txt");
+    CHECK(node != NULL && node->size == 12);
+    CHECK(unlink(disk_at("a.txt")) == 0 && mkdir(disk_at("a.txt"), 0700) == 0);
+    node = roc_lookup(m, "/home/guest/a.txt");
+    CHECK(node != NULL && node->dir);
+    CHECK(rmdir(disk_at("a.txt")) == 0);
+    CHECK(roc_lookup(m, "/home/guest/a.txt") == NULL && !indexed(m, "/home/guest/a.txt"));
+
+    disk_rm(disk_at("d"));
+    CHECK(roc_lookup(m, "/home/guest/d") != NULL); /* d/e is under it, in the index */
+    CHECK(roc_lookup(m, "/home/guest/d/e/f.txt") == NULL);
+    CHECK(roc_lookup(m, "/home/guest/d/e") == NULL && roc_lookup(m, "/home/guest/d") == NULL);
+    CHECK(indexed(m, "/home/guest/.history") && roc_lookup(m, "/home/guest/.history") != NULL);
+    CHECK(roc_lookup(m, "/pub/kutta.md") != NULL); /* the site's: not the host's to say */
+
+    /* the shell's own commands go by it: a directory made on the disk */
+    CHECK(mkdir(disk_at("later"), 0700) == 0);
+    send(m, "cd ~/later; pwd\r");
+    CHECK(strstr(drain(m), "\r\n/home/guest/later\r\n") != NULL);
+    disk_rm(disk_root);
+}
+
+/* roc_sync_dir brings a directory's entries to the host's listing: what
+   appeared is added, what went is dropped, a dangling link is what the
+   listing says; a listing that fails or overflows drops nothing. */
+static void test_sync_dir_follows_the_disk(void) {
+    mock_host h;
+    roc *m = boot_disk(&h);
+    CHECK(mkdir(disk_at("s"), 0700) == 0 && mkdir(disk_at("s/sub"), 0700) == 0);
+    disk_put("s/a", "1");
+    disk_put("s/b", "22");
+    CHECK(symlink("nowhere", disk_at("s/dangle")) == 0);
+    roc_sync_dir(m, "/home/guest/s");
+    const vfs_node *node = vfs_lookup(&m->fs, "/home/guest/s/b");
+    CHECK(node != NULL && node->size == 2);
+    node = vfs_lookup(&m->fs, "/home/guest/s/sub");
+    CHECK(node != NULL && node->dir);
+    node = vfs_lookup(&m->fs, "/home/guest/s/dangle");
+    CHECK(node != NULL && !node->dir);
+
+    CHECK(unlink(disk_at("s/b")) == 0);
+    disk_put("s/c", "333");
+    disk_put("s/sub/x", "");
+    CHECK(roc_lookup(m, "/home/guest/s/sub/x") != NULL);
+    disk_rm(disk_at("s/sub"));
+    roc_sync_dir(m, "/home/guest/s");
+    CHECK(!indexed(m, "/home/guest/s/b") && indexed(m, "/home/guest/s/c"));
+    CHECK(indexed(m, "/home/guest/s/a") && indexed(m, "/home/guest/s/dangle"));
+    CHECK(indexed(m, "/home/guest/s/sub")); /* sub/x is still under it */
+
+    /* Tab and a glob see the disk as it is now */
+    disk_put("s/new.txt", "");
+    send(m, "cat /home/guest/s/ne\t");
+    drain(m);
+    CHECK(line_is(m, "cat /home/guest/s/new.txt "));
+    send(m, "\x15"
+            "echo ~/s/[acn]*\r");
+    CHECK(strstr(drain(m), "\r\n/home/guest/s/a /home/guest/s/c /home/guest/s/new.txt\r\n") !=
+          NULL);
+
+    disk_rm(disk_at("s"));
+    roc_sync_dir(m, "/home/guest/s"); /* no listing at all: nothing is taken as gone */
+    CHECK(indexed(m, "/home/guest/s/a") && indexed(m, "/home/guest/s/c"));
+
+    /* more entries than a listing compares: added, and none dropped */
+    CHECK(mkdir(disk_at("many"), 0700) == 0);
+    char rel[64];
+    for (int i = 0; i <= ROC_SYNC_SEEN + 1; i++) {
+        (void)snprintf(rel, sizeof(rel), "many/f%04d", i);
+        disk_put(rel, "");
+    }
+    roc_sync_dir(m, "/home/guest/many");
+    CHECK(indexed(m, "/home/guest/many/f0000") && indexed(m, "/home/guest/many/f1025"));
+    CHECK(unlink(disk_at("many/f0000")) == 0);
+    roc_sync_dir(m, "/home/guest/many");
+    CHECK(indexed(m, "/home/guest/many/f0000"));
+    CHECK(unlink(disk_at("many/f0001")) == 0); /* as many as it compares: the gone go */
+    roc_sync_dir(m, "/home/guest/many");
+    CHECK(!indexed(m, "/home/guest/many/f0000") && !indexed(m, "/home/guest/many/f0001"));
+    CHECK(indexed(m, "/home/guest/many/f1025"));
+
+    /* the root's entries are "/name": the disk mounted over the whole tree */
+    disk_put("top.txt", "t");
+    disk_mount = "/";
+    roc_sync_dir(m, "/");
+    disk_mount = "/home/guest";
+    CHECK(indexed(m, "/top.txt") && !indexed(m, "//top.txt"));
+    CHECK(!indexed(m, "/readme.txt")); /* the index's alone, and nothing under it */
+    CHECK(indexed(m, "/pub"));         /* not on this disk either, but full */
+    disk_rm(disk_root);
+}
+
+/* What POSIX has and this shell cannot: said on stderr with the machine's
+   name, and status 1, whatever the arguments (-h included). */
+static void test_more_commands(void) {
+    static const char *const stubs[] = {"kill", "mkfifo", "nice", "nohup", "renice", "stty", "ln"};
+    mock_host h;
+    roc *m = boot(&h);
+    drain(m);
+    char line[64];
+    char err[96];
+    for (size_t i = 0; i < sizeof(stubs) / sizeof(stubs[0]); i++) {
+        (void)snprintf(err, sizeof(err), "%s: not supported by rocchetto on shell.test\n",
+                       stubs[i]);
+        (void)snprintf(line, sizeof(line), "%s -h", stubs[i]);
+        util_case(m, line, "", 1, err);
+        (void)snprintf(line, sizeof(line), "%s a b", stubs[i]);
+        util_case(m, line, "", 1, err);
+    }
+    /* POSIX gives basename and dirname no options: -h is a path */
+    util_case(m, "basename", "usage: basename <path> [<suffix>]\n", 0, NULL);
+    util_case(m, "basename -h", "-h\n", 0, NULL);
+    util_case(m, "basename /a/b.txt b.txt", "b.txt\n", 0, NULL); /* the suffix is all of it */
+    util_case(m, "basename a/b.c .h", "b.c\n", 0, NULL);
+    util_case(m, "dirname", "usage: dirname <path>\n", 0, NULL);
+    util_case(m, "dirname -h", ".\n", 0, NULL);
+    util_case(m, "dirname //a//", "/\n", 0, NULL);
+    util_case(m, "whoami -h", "guest\n", 0, NULL);
+    util_case(m, "logname -h", "guest\n", 0, NULL);
+    roc_set_user(m, "ana");
+    send(m, "whoami; logname\r");
+    CHECK(strstr(drain(m), "\r\nana\r\nana\r\n") != NULL);
+
+    /* a host with no name: the machine's instead */
+    memset(&h, 0, sizeof(h));
+    roc_host host = {.filo_extend = roc_host_extend,
+                     .ctx = &h,
+                     .request = mock_request,
+                     .scratch = mock_scratch};
+    roc_init(&M, &host, 80, 24, ROC_F_PROMPT);
+    roc_feed(&M, h.req_id, (const uint8_t *)test_index, strlen(test_index));
+    roc_feed_eof(&M, h.req_id);
+    drain(&M);
+    util_case(&M, "stty -a", "", 1, "stty: not supported by rocchetto on " UNAME_M "\n");
+}
+
+/* link-at draws as print-at does and makes the cells a link (OSC 8 on the
+   wire); a URL the table cannot take is still drawn, only not a link. */
+static void test_screen_links(void) {
+    mock_host h;
+    roc *m = boot_menu(&h);
+    drain(m);
+    screen_reset(m);
+    CHECK(set_draw(m, "(do (print-at 0 0 (if (= (link-at 1 2 \"site\" \"https://example.org/\") 4)"
+                      " \"w4\" \"no\")) (link-at 3 0 \"bad\" \"has space\"))"));
+    CHECK(screen_paint(m));
+    const char *o = drain(m);
+    const canvas *c = &m->cmp.target;
+    CHECK(c->nlinks == 1 && c->links[0].row == 1 && c->links[0].col == 2 && c->links[0].cols == 4 &&
+          strcmp(c->links[0].url, "https://example.org/") == 0);
+    CHECK(strstr(o, "\x1b]8;;https://example.org/\x1b\\site") != NULL);
+    CHECK(strstr(canvas_row(c, 3), "bad") != NULL && strstr(o, "has space") == NULL);
+    CHECK(c->cells[0][0].cp == 'w' && c->cells[0][1].cp == '4'); /* its width back */
+    CHECK(set_draw(m, "(link-at 0 0 \"x\")"));
+    CHECK(!screen_paint(m));
+    CHECK(strstr(screen_error(m), "link-at expects a row, a column, text and a URL") != NULL);
+}
+
+/* scroll moves a rectangle up (negative) or down inside the canvas, and
+   what it came off goes blank; further than its height, all of it does. */
+static void test_screen_scroll(void) {
+    mock_host h;
+    roc *m = boot_menu(&h);
+    drain(m);
+    screen_reset(m);
+    CHECK(set_draw(m, "(do (print-at 0 0 \"ax\") (print-at 1 0 \"b\") (print-at 2 0 \"c\")"
+                      " (scroll 0 0 3 1 -1)"
+                      " (print-at 0 5 \"d\") (print-at 1 5 \"e\") (print-at 2 5 \"f\")"
+                      " (scroll 0 5 3 1 1)"
+                      " (print-at 0 9 \"g\") (print-at 1 9 \"h\") (scroll 0 9 2 1 5))"));
+    CHECK(screen_paint(m));
+    const canvas *c = &m->cmp.target;
+    CHECK(c->cells[0][0].cp == 'b' && c->cells[1][0].cp == 'c' && c->cells[2][0].cp == ' ');
+    CHECK(c->cells[0][1].cp == 'x'); /* outside the rectangle: kept */
+    CHECK(c->cells[0][5].cp == ' ' && c->cells[1][5].cp == 'd' && c->cells[2][5].cp == 'e');
+    CHECK(c->cells[0][9].cp == ' ' && c->cells[1][9].cp == ' ');
+    CHECK(set_draw(m, "(scroll 0 0 1 1)"));
+    CHECK(!screen_paint(m));
+    CHECK(strstr(screen_error(m), "scroll expects") != NULL);
+}
+
+/* wrap breaks text where a field of that width would: at a line break, at
+   the last space, inside a word with none, wide runes counted as two. */
+static void test_screen_wrap(void) {
+    static const char *const cases[][2] = {
+        {"(wrap \"one two three\\nfour\" 7)", "[one two|three|four]"},
+        {"(wrap \"ab cdef\" 4)", "[ab|cdef]"},
+        {"(wrap \"abcdefgh\" 3)", "[abc|def|gh]"},
+        {"(wrap \"\xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e\" 4)",
+         "[\xe6\x97\xa5\xe6\x9c\xac|\xe8\xaa\x9e]"},
+        {"(wrap \"a\\n\" 5)", "[a|]"},
+        {"(wrap \"\" 5)", "[]"},
+    };
+    mock_host h;
+    roc *m = boot_menu(&h);
+    drain(m);
+    screen_reset(m);
+    char src[256];
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        (void)snprintf(src, sizeof(src),
+                       "(print-at 0 0 (str-concat \"[\" (str-join \"|\" %s) \"]\"))", cases[i][0]);
+        CHECK(set_draw(m, src));
+        CHECK(screen_paint(m));
+        const char *row = canvas_row(&m->cmp.target, 0);
+        size_t n = strlen(cases[i][1]);
+        if (strncmp(row, cases[i][1], n) != 0 || row[n] != ' ') {
+            fprintf(stderr, "%s: [%s]\n", cases[i][0], row);
+            CHECK(false);
+        }
+    }
+    CHECK(set_draw(m, "(wrap \"x\" 0)"));
+    CHECK(!screen_paint(m));
+    CHECK(strstr(screen_error(m), "wrap needs at least one column") != NULL);
+    CHECK(set_draw(m, "(wrap \"x\")"));
+    CHECK(!screen_paint(m));
+    CHECK(strstr(screen_error(m), "wrap expects a string and a width") != NULL);
+}
+
+static void put_home(roc *m, const char *path, const char *body) {
+    CHECK(roc_write_file(m, "test", path, (const uint8_t *)body, strlen(body)));
+}
+
+/* filo bundle puts units into one bundle, each a member named by its file;
+   what it refuses, and what the compiler refuses, is said as filo: WHERE: */
+static void test_filo_bundle_and_errors(void) {
+    mock_host h;
+    roc *m = boot(&h);
+    drain(m);
+    put_home(m, "/home/guest/a.filo", "(echo \"from a\")\n");
+    put_home(m, "/home/guest/b.filo", "(echo \"from b\")\n");
+    send(m, "mkdir ~/x; filo build -o ~/a.fbc ~/a.filo; filo build -o ~/b.fbc ~/b.filo;"
+            " filo build -o ~/x/a.fbc ~/a.filo\r");
+    CHECK(strstr(drain(m), "filo:") == NULL);
+    send(m, "filo bundle -o ~/ab.fbb ~/a.fbc ~/b.fbc\r");
+    CHECK(strstr(drain(m), "filo:") == NULL);
+    send(m, "filo dump ~/ab.fbb\r");
+    const char *o = drain(m);
+    CHECK(strstr(o, "\r\n== a\r\n") != NULL && strstr(o, "\r\n== b\r\n") != NULL &&
+          strstr(o, "\"from b\"") != NULL);
+    send(m, "filo decompile ~/ab.fbb b\r");
+    o = drain(m);
+    CHECK(strstr(o, "(echo \"from b\")") != NULL && strstr(o, "from a") == NULL);
+    send(m, "filo ~/ab.fbb\r"); /* a bundle runs its member of its own name */
+    CHECK(strstr(drain(m), "rocchetto: ab: not a program named ab") != NULL);
+    send(m, "filo bundle -o ~/b.fbb ~/a.fbc ~/b.fbc; filo ~/b.fbb\r");
+    o = drain(m);
+    CHECK(strstr(o, "\r\nfrom b\r\n") != NULL && strstr(o, "from a") == NULL);
+
+    send(m, "filo bundle ~/a.fbc\r");
+    CHECK(strstr(drain(m), "usage: filo bundle -o OUT UNIT...") != NULL);
+    send(m, "filo bundle -o ~/no.fbb ~/a.filo\r");
+    CHECK(strstr(drain(m), "rocchetto: filo: /home/guest/a.filo: Not a unit") != NULL);
+    send(m, "filo bundle -o ~/no.fbb ~/nothere.fbc\r");
+    CHECK(strstr(drain(m), "rocchetto: filo: /home/guest/nothere.fbc: No such file or directory") !=
+          NULL);
+    send(m, "filo bundle -o ~/no.fbb ~/a.fbc ~/x/a.fbc\r");
+    CHECK(strstr(drain(m), "\r\nfilo: bundle: bytecode: two bundle members named a\r\n") != NULL);
+    const uint8_t *d = NULL;
+    size_t n = 0;
+    CHECK(!roc_find_file(m, "/home/guest/no.fbb", &d, &n));
+
+    put_home(m, "/home/guest/open.filo", "(echo \"x\"\n");
+    send(m, "filo build -o ~/no.fbc ~/open.filo\r");
+    /* a parse error says its own place */
+    CHECK(strstr(drain(m), "\r\nfilo: /home/guest/open.filo: parse error at line 1, col 1: "
+                           "unterminated list\r\n") != NULL);
+    put_home(m, "/home/guest/bad.filo", "(echo 1)\n(def f (fn (1) 1))\n");
+    send(m, "filo build -o ~/no.fbc ~/bad.filo; filo show ir ~/bad.filo\r");
+    o = drain(m);
+    static const char where[] = "\r\nfilo: /home/guest/bad.filo:2:8: fn params must be symbols\r\n";
+    const char *at = strstr(o, where); /* build, then show */
+    CHECK(at != NULL && strstr(at + 1, where) != NULL);
+    CHECK(!roc_find_file(m, "/home/guest/no.fbc", &d, &n));
+}
+
+/* A source read on the screen is coloured the way a fenced block of it
+   would be; through cat it is not, since cat may be writing to a pipe. */
+static void test_less_colours_source(void) {
+    mock_host h;
+    roc *m = boot(&h);
+    drain(m);
+    put_home(m, "/home/guest/s.filo", "; a comment\n(echo \"keep-canvas\")\n");
+    send(m, "cat ~/s.filo\r");
+    const char *o = drain(m);
+    CHECK(strstr(o, "keep-canvas") != NULL && strstr(o, "\x1b[0;2m") == NULL);
+    send(m, "less ~/s.filo\r");
+    o = drain(m);
+    CHECK(m->t.napps == 1 && strstr(o, "\x1b[0;2m; a comment") != NULL);
+    send(m, "q");
+    drain(m);
+    CHECK(m->t.napps == 0);
+}
+
+/* The home follows the user: a login carries the files to /home/<name>,
+   the working directory too, and back; every guest shares /home/guest. */
+static void test_home_follows_set_user(void) {
+    mock_host h;
+    roc *m = boot(&h);
+    send(m, "cd; echo hi > note.txt; mkdir w; cd w\r");
+    drain(m);
+    roc_set_user(m, "crg");
+    send(m, "pwd; cat ~/note.txt; ls /home\r");
+    const char *o = drain(m);
+    CHECK(strstr(o, "\r\n/home/crg/w\r\n") != NULL && strstr(o, "\r\nhi\r\n") != NULL);
+    CHECK(strstr(o, "crg") != NULL && strstr(o, "guest") == NULL);
+    send(m, "echo more > ~/w/second.txt\r");
+    drain(m);
+    roc_set_user(m, "guest#914f");
+    send(m, "pwd; cat second.txt; echo $USER\r");
+    o = drain(m);
+    CHECK(strstr(o, "\r\n/home/guest/w\r\n") != NULL && strstr(o, "\r\nmore\r\n") != NULL);
+    CHECK(strstr(o, "\r\nguest#914f\r\n") != NULL); /* the name is kept whole */
+}
+
 /* A test, named when it failed: a CHECK says the line, which may be a
    helper's. */
 #define RUN(t)                                                                                     \
@@ -8931,6 +9390,15 @@ static void roc_tests(void) {
     RUN(test_screen_failed_key_recovers);
     RUN(test_screen_opens_an_app_and_comes_back);
     RUN(test_done_goes_back);
+    RUN(test_lookup_follows_the_disk);
+    RUN(test_sync_dir_follows_the_disk);
+    RUN(test_more_commands);
+    RUN(test_screen_links);
+    RUN(test_screen_scroll);
+    RUN(test_screen_wrap);
+    RUN(test_filo_bundle_and_errors);
+    RUN(test_less_colours_source);
+    RUN(test_home_follows_set_user);
 }
 
 #ifndef ROC_TEST_NO_MAIN
