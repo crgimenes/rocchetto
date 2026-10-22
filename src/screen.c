@@ -273,6 +273,22 @@ static int b_pager_buffer(filo_ctx *ctx, const filo_value *a, uint32_t n, filo_v
 /* (done): the program is over. The shell goes back to whoever opened it:
    the screen RET names, else the screen that led here (a game chosen from
    a list goes back to the list), else what was under the shell. */
+/* (report-score value [track]): a game's result, to the layer that keeps
+   scores, named by the program reporting it; #f where there is none. */
+static int b_report_score(filo_ctx *ctx, const filo_value *a, uint32_t n, filo_value *out) {
+    int32_t value = 0;
+    char track[PAINT_TRACK_MAX];
+    if (paint_arg_score(ctx, a, n, &value, track) != FILO_OK) {
+        return FILO_ERR;
+    }
+    roc *m = roc_of(ctx);
+    if (roc_layer_spec.score != NULL) {
+        roc_layer_spec.score(m, m->scr.name, track, value);
+    }
+    *out = filo_bool(roc_layer_spec.score != NULL);
+    return FILO_OK;
+}
+
 static int b_done(filo_ctx *ctx, const filo_value *a, uint32_t n, filo_value *out) {
     (void)a;
     if (n != 0) {
@@ -576,6 +592,7 @@ void screen_context_init(roc *m, filo_ctx *ctx, uint8_t *persistent, size_t plen
     (void)filo_register_builtin(ctx, "entry-at", b_entry_at);
     (void)filo_register_builtin(ctx, "cursor-at", b_cursor_at);
     (void)filo_register_builtin(ctx, "done", b_done);
+    (void)filo_register_builtin(ctx, "report-score", b_report_score);
     (void)filo_register_builtin(ctx, "pager-file", b_pager_file);
 #if ROC_APP_EDIT
     (void)filo_register_builtin(ctx, "pager-buffer", b_pager_buffer);

@@ -322,6 +322,9 @@ typedef struct {
     bool (*line_active)(const roc *m);
     void (*line)(roc *m, char *line);
     const char *(*line_prompt)(const roc *m);
+    /* a game's result (report-score), by the program's name and its track
+       ("" for none): NULL where nothing keeps scores */
+    void (*score)(roc *m, const char *game, const char *track, int32_t value);
 } roc_layer;
 
 /* Whether the layer's line program has the typed line. */
