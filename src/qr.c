@@ -254,7 +254,7 @@ static void apply_mask(int mask) {
 
 /* ---- the penalty of a masked symbol ---- */
 
-static uint8_t at(int r, int c, bool across) {
+static uint8_t module_at(int r, int c, bool across) {
     return across ? mod[r][c] : mod[c][r];
 }
 
@@ -267,7 +267,7 @@ static long lines_penalty(bool across) {
     for (int i = 0; i < size; i++) {
         int run = 1;
         for (int j = 1; j <= size; j++) {
-            if (j < size && at(i, j, across) == at(i, j - 1, across)) {
+            if (j < size && module_at(i, j, across) == module_at(i, j - 1, across)) {
                 run++;
                 continue;
             }
@@ -280,8 +280,8 @@ static long lines_penalty(bool across) {
             int a = 0; /* modules matching each way round */
             int b = 0;
             for (int k = 0; k < 11; k++) {
-                a += at(i, j + k, across) == finder_a[k] ? 1 : 0;
-                b += at(i, j + k, across) == finder_b[k] ? 1 : 0;
+                a += module_at(i, j + k, across) == finder_a[k] ? 1 : 0;
+                b += module_at(i, j + k, across) == finder_b[k] ? 1 : 0;
             }
             p += (a == 11 ? 40 : 0) + (b == 11 ? 40 : 0);
         }
