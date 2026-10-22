@@ -222,7 +222,7 @@ dist: $(CORE) $(FILOSRC) $(GEN) $(HDRS) $(ROC)/host/posix/main.c
 smoke: rocchetto
 	sh $(FILO_TERM)/tools/smoke.sh ./rocchetto 'exit\r'
 
-.PHONY: all test footprint small fmt fmt-check tidy check fuzz clean all qa smoke dist wasm wasm-test compose lib FORCE
+.PHONY: all test cov footprint small fmt fmt-check tidy check fuzz clean all qa smoke dist wasm wasm-test compose lib FORCE
 
 # The composing tool: the same runtime, screens read from a directory and
 # redrawn as they are saved.
@@ -303,6 +303,19 @@ test: $(CORE) $(FILOSRC) $(GEN) $(HDRS) $(TEST_SRC) $(CP_UNITS)
 		$(WARN) $(APPFLAGS) -DROC_ROOT='"$(abspath $(ROC))"' \
 		-o build/test_roc $(CORE) $(FILOSRC) $(GEN) $(TEST_SRC)
 	./build/test_roc
+
+# Line coverage of test_roc over the shell's own sources: build/cov/cov.txt.
+LLVM_PROFDATA ?= xcrun llvm-profdata
+LLVM_COV ?= xcrun llvm-cov
+cov: $(CORE) $(FILOSRC) $(GEN) $(HDRS) $(TEST_SRC) $(CP_UNITS)
+	@rm -rf build/cov && mkdir -p build/cov
+	$(CC) -std=c23 -O1 -g $(INC) -I$(ROC)/test -fprofile-instr-generate -fcoverage-mapping \
+		$(WARN) $(APPFLAGS) -DROC_ROOT='"$(abspath $(ROC))"' \
+		-o build/cov/test_roc $(CORE) $(FILOSRC) $(GEN) $(TEST_SRC)
+	LLVM_PROFILE_FILE=build/cov/roc.profraw ./build/cov/test_roc > /dev/null
+	$(LLVM_PROFDATA) merge -sparse -o build/cov/all.profdata build/cov/roc.profraw
+	$(LLVM_COV) report -instr-profile=build/cov/all.profdata build/cov/test_roc $(CORE) \
+		| tee build/cov/cov.txt | tail -1
 
 FMT_SRC ?= $(wildcard $(addprefix $(ROC)/,src/*.c src/*.h host/*.c host/posix/*.c test/*.c fuzz/*.c tools/*.c))
 fmt:
