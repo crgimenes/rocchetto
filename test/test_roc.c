@@ -119,11 +119,11 @@ static size_t command_source(const char *name, uint8_t *buf, size_t cap) {
    into the program bin/NAME (the build's mkunits does this), the rest as
    it is. */
 static void tree_programs(roc *m, const tree_file *files, size_t n) {
-    static tree_file out[256];
-    static char paths[256][64];
-    static uint8_t units[256][8192];
-    CHECK(n <= 256);
-    n = n < 256 ? n : 256;
+    static tree_file out[512];
+    static char paths[512][64];
+    static uint8_t units[512][8192];
+    CHECK(n <= 512);
+    n = n < 512 ? n : 512;
     for (size_t i = 0; i < n; i++) {
         out[i] = files[i];
         size_t pl = strlen(files[i].path);
