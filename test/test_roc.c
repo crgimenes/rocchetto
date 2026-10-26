@@ -1362,6 +1362,7 @@ static void test_scripts(void) {
     send(m, "less /bin/filo_api.md\r");
     drain(m);
     CHECK(m->t.napps == 1);
+    CHECK(m->pg.margin == ROC_DOC_MARGIN); /* a document is read away from the edges */
     send(m, "q");
     drain(m);
     CHECK(m->t.napps == 0);
@@ -4336,6 +4337,7 @@ static void test_pager_search(void) {
     send(m, "less ~/p.txt\r");
     drain(m);
     CHECK(m->pg.top == 0);
+    CHECK(m->pg.margin == 0); /* anything else as less shows it, edge to edge */
     send(m, "/beta");
     const char *o = drain(m);
     CHECK(strstr(o, "/beta") != NULL); /* typed on the status line */

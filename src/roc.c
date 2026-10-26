@@ -1125,6 +1125,9 @@ static void reader_begin(roc *m, roc_req_kind kind, const char *path) {
     } else {
         md_reset(&m->md, markdown);
     }
+    if (markdown && kind == ROC_REQ_LESS) {
+        m->pg.margin = ROC_DOC_MARGIN;
+    }
     m->host.request(m->host.ctx, m->req_id, path);
 }
 
@@ -1306,6 +1309,7 @@ void roc_show_bytes(roc *m, bool less, const char *name, const uint8_t *data, si
     m->rd_last = 0;
     if (less) {
         pager_reset(&m->pg, name);
+        m->pg.margin = markdown ? ROC_DOC_MARGIN : 0;
     }
     if (!markdown && less) {
         md_source(&m->md, hl_lang_of_name(name));

@@ -43,6 +43,7 @@ enum {
     ROC_USER_MAX = 32,               /* name in the prompt, NUL included */
     ROC_RDLINE_MAX = 512,
     ROC_ESC_TIMEOUT_MS = KEYIN_ESC_TIMEOUT_MS,
+    ROC_DOC_MARGIN = 2,            /* columns each side of a markdown document in less */
     ROC_CAP_MAX = ROC_CFG_CAP_MAX, /* what one redirected command may write */
 };
 
