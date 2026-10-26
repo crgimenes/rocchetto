@@ -371,6 +371,21 @@ WASM_EXPORT("roc_w_exited") uint32_t roc_w_exited(void) {
     return roc_exited(&M) ? 1U : 0U;
 }
 
+#if ROC_APP_SCREENS
+/* Where the visitor is, for the page's history (screen_where): the bytes
+   at roc_w_wherebuf, as many as this returns. Its own buffer: iobuf may be
+   a stopped call's. */
+static char wherebuf[VFS_PATH_MAX + SCR_NAME_MAX];
+
+WASM_EXPORT("roc_w_wherebuf") const char *roc_w_wherebuf(void) {
+    return wherebuf;
+}
+
+WASM_EXPORT("roc_w_where") uint32_t roc_w_where(void) {
+    return (uint32_t)screen_where(&M, wherebuf, sizeof(wherebuf));
+}
+#endif
+
 WASM_EXPORT("roc_w_stream_data") void roc_w_stream_data(uint32_t len) {
     if (len > sizeof(iobuf)) {
         len = (uint32_t)sizeof(iobuf);

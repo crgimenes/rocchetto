@@ -95,6 +95,10 @@ typedef struct {
        on from the screen beneath. */
     char trail[SCR_TRAIL][SCR_NAME_MAX];
     uint8_t ntrail;
+    char arg[VFS_PATH_MAX]; /* what the screen was given, its ARG */
+    /* the door exec put over the screen ("read:/pub/x.md", "fire"), for
+       screen_where while that door is the app on top */
+    char over[VFS_PATH_MAX];
     char pending[VFS_PATH_MAX];       /* what exec asked for, "name:arg" */
     char fx[SCR_FX_MAX][SCR_FX_NAME]; /* the effects it asked to play on the way */
     size_t nfx;
@@ -171,6 +175,17 @@ void screen_enter_with(roc *m, const char *name, const char *arg);
 /* True while a screen is the app on top: the editor loads itself in its
    place instead of stacking a second one over the same state. */
 bool screen_is_top(const roc *m);
+
+/* A move from outside the shell — a page's history going back or forward,
+   a link — as (exec TARGET) from the screen on top would make it, so ESC
+   from there steps back to that screen. False when the move was not made:
+   a door is up, or nothing is called that (the front screen comes back). */
+bool screen_exec(roc *m, const char *target);
+
+/* Where the visitor is, as a link could name it: the screen on top with its
+   argument ("news", "area:/pub"), or the door over it ("read:/pub/x.md");
+   "" where no link leads — the shell, a show, nothing up yet. */
+size_t screen_where(const roc *m, char *dst, size_t cap);
 
 /* Places the field a draw hook asked for (an area, with rows above one)
    and puts the caret in it. */

@@ -939,6 +939,8 @@ bool screen_load_with(roc *m, const char *name, const char *arg) {
     s->quiet_load = quiet;
     strcpy(s->name, name);
     strcpy(s->back, s->ntrail > 0 ? s->trail[s->ntrail - 1] : "");
+    strcpy(s->arg, arg);
+    s->over[0] = '\0';
 #if ROC_APP_EDIT
     if (strcmp(name, m->ed.app) == 0) {
         (void)filo_set_global(&s->ctx, "RET", filo_cstring(m->ed.ret));
@@ -1191,6 +1193,7 @@ static settle_result settle(roc *m) {
 
     /* "read:/pub/x.md" names a target and what it should open. A directory
        in the tree can never hold a colon, so there is nothing to confuse. */
+    strcpy(s->over, next); /* a door, until a screen loads in its place */
     char *arg = strchr(next, ':');
     if (arg != NULL) {
         *arg = '\0';
@@ -1207,6 +1210,7 @@ static settle_result settle(roc *m) {
         }
         i++;
     }
+    s->over[0] = '\0';
     if (nfx == 0) {
         if (!screen_load_with(m, next, arg != NULL ? arg : "")) {
             return SETTLE_FAIL;
@@ -1382,6 +1386,47 @@ static void screen_on_resize(void *ctx) {
 
 bool screen_is_top(const roc *m) {
     return term_app_top(&m->t) == &screen_app;
+}
+
+bool screen_exec(roc *m, const char *target) {
+    if (!screen_is_top(m) || !screen_pend(m, target)) {
+        return false;
+    }
+    if (settle(m) != SETTLE_FAIL) {
+        return true;
+    }
+    /* half a screen would take keys without an answer, as a key's failure
+       would leave it: the front screen instead */
+    if (roc_layer_spec.home != NULL) {
+        (void)screen_load(m, roc_layer_spec.home);
+    }
+    return false;
+}
+
+size_t screen_where(const roc *m, char *dst, size_t cap) {
+    const screen_state *s = &m->scr;
+    const char *name = "";
+    const char *arg = "";
+    if (screen_is_top(m)) {
+        name = s->name;
+        arg = s->arg;
+    } else if (m->mode == ROC_MODE_APP) {
+        name = s->over;
+    }
+    size_t nlen = strlen(name);
+    size_t alen = strlen(arg);
+    size_t n = nlen + (alen > 0 ? 1 + alen : 0);
+    if (nlen == 0 || n + 1 > cap) {
+        dst[0] = '\0';
+        return 0;
+    }
+    memcpy(dst, name, nlen);
+    if (alen > 0) {
+        dst[nlen] = ':';
+        memcpy(dst + nlen + 1, arg, alen);
+    }
+    dst[n] = '\0';
+    return n;
 }
 
 void screen_enter_with(roc *m, const char *name, const char *arg) {
