@@ -122,6 +122,9 @@ typedef struct {
        back. fresh says the next paint must blank it anyway — the screen was
        just loaded, the size changed, or an app above painted over it. */
     bool keep_canvas;
+    /* MOUSE as the program's init left it: false for one that answers no
+       click (an editor), so a drag over it selects text */
+    bool mouse;
     bool fresh;
 
     bool ready;

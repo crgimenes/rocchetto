@@ -614,6 +614,8 @@ void screen_context_init(roc *m, filo_ctx *ctx, uint8_t *persistent, size_t plen
     /* the cell of the last click, for KEY_CLICK */
     (void)filo_set_global(ctx, "MX", filo_num(0));
     (void)filo_set_global(ctx, "MY", filo_num(0));
+    /* a program that answers no click redefines it #f in its init */
+    (void)filo_set_global(ctx, "MOUSE", filo_bool(true));
     (void)filo_set_global(ctx, "MS", filo_num(0));
     (void)filo_set_global(ctx, "ARG", filo_cstring(""));
     (void)filo_set_global(ctx, "BACK", filo_cstring(""));
@@ -836,6 +838,14 @@ static bool start(roc *m) {
         return false;
     }
     filo_seal_globals(&s->ctx);
+    filo_value mouse = {0};
+    s->mouse = true;
+    if (filo_get_global(&s->ctx, "MOUSE", &mouse) && mouse.kind == FILO_BOOL && !mouse.u.b) {
+        s->mouse = false;
+    }
+    if (screen_is_top(m)) {
+        term_app_mouse(&m->t, s->mouse);
+    }
     for (size_t i = 0; i < SCR_HOOK_COUNT; i++) {
         scr_hook *h = &s->hooks[i];
         char path[TREE_PATH_MAX];
@@ -1080,6 +1090,7 @@ bool screen_build(roc *m, const char *name, uint8_t *dst, size_t cap, size_t *le
 
 void screen_attach(roc *m) {
     roc_app_enter(m, &screen_app);
+    term_app_mouse(&m->t, m->scr.mouse);
 }
 
 /* Not every screen of this shell is written in Filo: the doors and the live
