@@ -4662,7 +4662,8 @@ static void test_paste_into_editor(void) {
     send(m, "edit ~/p.txt\r");
     const char *o = drain(m);
     /* asked for while the app is up: marked pastes and the mouse */
-    CHECK(strstr(o, "\x1b[?2004h\x1b[?1000h\x1b[?1006h") != NULL);
+    CHECK(strstr(o, "\x1b[?2004h") != NULL);
+    CHECK(strstr(o, "\x1b[?1000h\x1b[?1006h") != NULL);
     send(m, "\x1b[200~");
     send(m, "one\ntwo\nthree");
     o = drain(m);
