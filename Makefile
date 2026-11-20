@@ -19,7 +19,7 @@ WARN = -Wall -Wextra -Werror -Wshadow -Wconversion -Wdouble-promotion -Wundef
 # Filo, the terminal a Filo program runs on (filo-term), Core War, and the
 # editor are their own repositories, beside this one.
 FILO ?= $(ROC)/../clang_filo
-FILOSRC = $(FILO)/filo.c $(FILO)/filo_math.c $(FILO)/filo_strings.c $(FILO)/filo_nolibc.c
+FILOSRC = $(FILO)/src/filo.c $(FILO)/src/filo_math.c $(FILO)/src/filo_strings.c $(FILO)/src/filo_nolibc.c
 FILO_TERM ?= $(ROC)/../filo-term
 TERM_SRC = $(FILO_TERM)/src
 CW ?= $(ROC)/../corewar
@@ -32,7 +32,7 @@ WASM_OPT ?= wasm-opt
 EXTRA_INC ?=
 # glibc and musl hide POSIX (cfmakeraw, sigaction, tm_gmtoff) under a strict
 # -std; the BSDs and macOS ignore the macro.
-INC = -D_DEFAULT_SOURCE -I$(ROC)/src -I$(TERM_SRC) -I$(CW_SRC) -I$(FILO) -Ibuild $(EXTRA_INC)
+INC = -D_DEFAULT_SOURCE -I$(ROC)/src -I$(TERM_SRC) -I$(CW_SRC) -I$(FILO)/src -Ibuild $(EXTRA_INC)
 CFLAGS = -std=c23 -O2 $(WARN) $(APPFLAGS) $(INC)
 
 # The version is whatever git says, written to a header so that a new tag
@@ -53,9 +53,9 @@ APP_EDIT = $(ROC)/src/edit.c $(TERM_SRC)/tbx.c
 APP_COREWAR = $(ROC)/src/corewar.c $(CW_SRC)/mars.c $(CW_SRC)/arena.c
 # filo's tools, clang_filo's listing and decompiler: their numbers are the
 # runtime's (FBC_HOST_NUMBERS), since the shell has no C library
-APP_TOOLS = $(addprefix $(ROC)/src/,filotools.c debug.c diff.c) $(FILO)/fbc_dump.c $(FILO)/fbc_decompile.c
+APP_TOOLS = $(addprefix $(ROC)/src/,filotools.c debug.c diff.c) $(FILO)/src/fbc_dump.c $(FILO)/src/fbc_decompile.c
 # the formatter, which the tools and the editor (tb-format) both take
-APP_FMT = $(FILO)/filo_fmt.c
+APP_FMT = $(FILO)/src/filo_fmt.c
 APPSRC = $(if $(filter 1,$(APPS_SCREENS)),$(APP_SCREENS)) \
 	$(if $(filter 1,$(APPS_EDIT)),$(APP_EDIT)) \
 	$(if $(filter 1,$(APPS_COREWAR)),$(APP_COREWAR)) \
@@ -71,8 +71,8 @@ LAYER_SRC ?=
 BASE = $(EXTEND_SRC) $(addprefix $(ROC)/src/,roc.c cmds.c script.c script_data.c fsmeta.c fileh.c sh.c tree.c vfs.c ufs.c home.c ed.c printf.c regex.c qr.c) \
 	$(addprefix $(TERM_SRC)/,keyin.c canvas.c md.c hl.c pager.c term.c utf8.c tbuf.c)
 CORE = $(BASE) $(APPSRC) $(LAYER_SRC)
-HDRS = build/version.h $(FILO)/filo.h $(wildcard $(ROC)/src/*.h) $(CW_SRC)/mars.h $(CW_SRC)/arena.h \
-	$(FILO)/fbc_dump.h $(FILO)/fbc_decompile.h $(FILO)/filo_fmt.h $(wildcard $(TERM_SRC)/*.h) \
+HDRS = build/version.h $(FILO)/src/filo.h $(wildcard $(ROC)/src/*.h) $(CW_SRC)/mars.h $(CW_SRC)/arena.h \
+	$(FILO)/src/fbc_dump.h $(FILO)/src/fbc_decompile.h $(FILO)/src/filo_fmt.h $(wildcard $(TERM_SRC)/*.h) \
 	$(EXTRA_HDRS)
 
 # The tree goes into the binary with C23's #embed where the compiler has it
@@ -253,7 +253,7 @@ lib-sources:
 # the objects and an unchanged one does not
 build/libroc.cflags: FORCE
 	@mkdir -p build
-	@printf '%s\n' '-std=c23 $(APPFLAGS) -I$(abspath $(ROC)/src) -I$(abspath build) -I$(abspath $(TERM_SRC)) -I$(abspath $(CW_SRC)) -I$(abspath $(FILO))' > $@.tmp
+	@printf '%s\n' '-std=c23 $(APPFLAGS) -I$(abspath $(ROC)/src) -I$(abspath build) -I$(abspath $(TERM_SRC)) -I$(abspath $(CW_SRC)) -I$(abspath $(FILO)/src)' > $@.tmp
 	@cmp -s $@.tmp $@ || mv $@.tmp $@
 	@rm -f $@.tmp
 
@@ -488,8 +488,8 @@ esp32: APPS_TOOLS = 0
 esp32: esp32-src
 	arduino-cli compile -b $(ESP32_FQBN) $(ESP32_DIR) \
 		--build-property "tools.ctags.cmd.path=/usr/bin/true" \
-		--build-property "compiler.c.extra_flags=-std=c23 -I$(abspath $(ROC)/src) -I$(abspath $(TERM_SRC)) -I$(CURDIR)/build -I$(abspath $(FILO)) $(APPFLAGS) $(ESP32_CFG)" \
-		--build-property "compiler.cpp.extra_flags=-I$(abspath $(ROC)/src) -I$(abspath $(TERM_SRC)) -I$(CURDIR)/build -I$(abspath $(FILO)) $(APPFLAGS) $(ESP32_CFG)"
+		--build-property "compiler.c.extra_flags=-std=c23 -I$(abspath $(ROC)/src) -I$(abspath $(TERM_SRC)) -I$(CURDIR)/build -I$(abspath $(FILO)/src) $(APPFLAGS) $(ESP32_CFG)" \
+		--build-property "compiler.cpp.extra_flags=-I$(abspath $(ROC)/src) -I$(abspath $(TERM_SRC)) -I$(CURDIR)/build -I$(abspath $(FILO)/src) $(APPFLAGS) $(ESP32_CFG)"
 
 esp32-flash: esp32
 	@test -n "$(ESP32_PORT)" || { echo "esp32-flash: name the port, ESP32_PORT=/dev/..."; exit 2; }
