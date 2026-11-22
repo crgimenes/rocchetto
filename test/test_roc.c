@@ -9002,6 +9002,104 @@ static void test_sync_dir_follows_the_disk(void) {
     disk_rm(disk_root);
 }
 
+static bool disk_file_put(void *ctx, const char *path, const uint8_t *data, size_t len) {
+    (void)ctx;
+    char full[1024];
+    if (!disk_path(path, full, sizeof(full))) {
+        return false;
+    }
+    FILE *f = fopen(full, "wb");
+    if (f == NULL) {
+        return false;
+    }
+    bool ok = fwrite(data, 1, len, f) == len;
+    return fclose(f) == 0 && ok;
+}
+
+static const uint8_t *disk_file_get(void *ctx, const char *path, size_t *len) {
+    (void)ctx;
+    static uint8_t held[4096];
+    char full[1024];
+    if (!disk_path(path, full, sizeof(full))) {
+        return NULL;
+    }
+    FILE *f = fopen(full, "rb");
+    if (f == NULL) {
+        return NULL;
+    }
+    *len = fread(held, 1, sizeof(held), f);
+    return fclose(f) == 0 ? held : NULL;
+}
+
+static bool disk_dir_make(void *ctx, const char *path) {
+    (void)ctx;
+    char full[1024];
+    return disk_path(path, full, sizeof(full)) && mkdir(full, 0700) == 0;
+}
+
+/* A host's mount: a directory outside the home that is the machine's
+   storage too. It shows in its parent's listing, and under it the person
+   writes and makes directories as in their home; the mount itself is not
+   theirs to remove, and the rest of the tree is read-only as before. With
+   no mount, the same path is nobody's to write. */
+static void test_a_mount_outside_the_home(void) {
+    mock_host h;
+    const char *tmp = getenv("TMPDIR");
+    (void)snprintf(disk_root, sizeof(disk_root), "%s/roc-disk-XXXXXX",
+                   tmp != NULL && tmp[0] != '\0' ? tmp : "/tmp");
+    CHECK(mkdtemp(disk_root) != NULL);
+    disk_mount = "/n";
+    memset(&h, 0, sizeof(h));
+    roc_host host = {.filo_extend = roc_host_extend,
+                     .ctx = &h,
+                     .host_name = "shell.test",
+                     .request = mock_request,
+                     .scratch = mock_scratch,
+                     .file_stat = disk_stat,
+                     .dir_list = disk_list,
+                     .file_get = disk_file_get,
+                     .file_put = disk_file_put,
+                     .dir_make = disk_dir_make,
+                     .mount = "/n"};
+    roc_init(&M, &host, 80, 24, ROC_F_PROMPT);
+    roc_feed(&M, h.req_id, (const uint8_t *)test_index, strlen(test_index));
+    roc_feed_eof(&M, h.req_id);
+    drain(&M);
+    roc *m = &M;
+    disk_put("there.txt", "of the machine\n");
+
+    send(m, "ls /\r");
+    CHECK(strstr(drain(m), "n") != NULL && indexed(m, "/n"));
+    send(m, "cat /n/there.txt\r");
+    CHECK(strstr(drain(m), "of the machine") != NULL);
+    send(m, "echo written > /n/new.txt\r");
+    CHECK(strstr(drain(m), "Read-only") == NULL);
+    char got[32] = {0};
+    FILE *f = fopen(disk_at("new.txt"), "rb");
+    CHECK(f != NULL);
+    if (f != NULL) {
+        CHECK(fread(got, 1, sizeof(got) - 1, f) == 8 && strcmp(got, "written\n") == 0);
+        CHECK(fclose(f) == 0);
+    }
+    send(m, "mkdir /n/made\r");
+    CHECK(strstr(drain(m), "Read-only") == NULL);
+    struct stat s;
+    CHECK(stat(disk_at("made"), &s) == 0 && S_ISDIR(s.st_mode));
+    send(m, "rmdir /n\r");
+    CHECK(strstr(drain(m), "Read-only file system") != NULL);
+    send(m, "echo no > /elsewhere.txt\r");
+    CHECK(strstr(drain(m), "Read-only file system") != NULL);
+    disk_rm(disk_root);
+
+    /* no mount: the path is the tree's, and the tree is read-only */
+    m = boot_disk(&h);
+    send(m, "echo no > /n/new.txt\r");
+    const char *said = drain(m);
+    CHECK(strstr(said, "Read-only file system") != NULL ||
+          strstr(said, "No such file or directory") != NULL);
+    disk_rm(disk_root);
+}
+
 /* What POSIX has and this shell cannot: said on stderr with the machine's
    name, and status 1, whatever the arguments (-h included). */
 static void test_more_commands(void) {
@@ -9395,6 +9493,7 @@ static void roc_tests(void) {
     RUN(test_done_goes_back);
     RUN(test_lookup_follows_the_disk);
     RUN(test_sync_dir_follows_the_disk);
+    RUN(test_a_mount_outside_the_home);
     RUN(test_more_commands);
     RUN(test_screen_links);
     RUN(test_screen_scroll);

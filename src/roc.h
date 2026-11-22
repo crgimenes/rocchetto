@@ -173,6 +173,12 @@ typedef struct {
        on the disk */
     bool (*dir_make)(void *ctx, const char *path);
     bool (*dir_del)(void *ctx, const char *path);
+    /* A directory outside the home that is the machine's storage too,
+       where this host mounts it ("/n", say): it shows in its parent's
+       listing, and under it the person writes as in their home, through
+       the hooks above and below, which answer for its paths. NULL: only
+       the home is theirs to write */
+    const char *mount;
     /* the machine's clipboard, for pbcopy and pbpaste (and the Filo
        functions of the same names). clipboard_get returns bytes valid
        until the next call to it, NULL when there is nothing. NULL hooks:

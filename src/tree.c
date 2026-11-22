@@ -67,6 +67,9 @@ void tree_mount(roc *m) {
     if (roc_home_path(m, ".history", home, sizeof(home))) {
         (void)vfs_add(&m->fs, home, 0, false);
     }
+    if (m->host.mount != NULL) {
+        (void)vfs_add_path(&m->fs, m->host.mount, 0, true);
+    }
     size_t i = 0;
     while (i < n) {
         char path[VFS_PATH_MAX];

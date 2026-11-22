@@ -1040,6 +1040,27 @@ static bool under_home(const roc *m, const char *path) {
     return false;
 }
 
+/* The person's to write: their home, and what lies under the directory
+   the host mounted beside it (host.mount), the machine's own storage. The
+   mount itself is the host's: not theirs to remove, move or write over. */
+static bool users_own(const roc *m, const char *path) {
+    if (under_home(m, path)) {
+        return true;
+    }
+    const char *at = m->host.mount;
+    if (at == NULL) {
+        return false;
+    }
+    size_t n = strlen(at);
+    if (strncmp(path, at, n) != 0) {
+        return false;
+    }
+    if (path[n] == '/') {
+        return true;
+    }
+    return false;
+}
+
 /* Where a file lands: the directory asked for, else where the person is
    when that is their own, else ~/uploads, made on the spot. Only the home
    takes files; the rest of the tree is the site's. */
@@ -1317,7 +1338,7 @@ static bool parent_ok(roc *m, const char *cmd, const char *arg, const char *path
     }
     memcpy(parent, path, n);
     parent[n] = '\0';
-    if (!under_home(m, path) || strcmp(path, parent) == 0) {
+    if (!users_own(m, path) || strcmp(path, parent) == 0) {
         roc_err(m, cmd, arg, "Read-only file system");
         return false;
     }
@@ -1443,7 +1464,7 @@ const char *roc_write_allowed(roc *m, const char *path) {
     /* The home is the user's, and so is anything that shadows the tree:
        writing there makes a copy, it does not touch what is in flash. So
        is /bin, where a program or a script of theirs is a command. */
-    if (!under_home(m, path) && !in_tree(path, NULL) && strncmp(path, "/bin/", 5) != 0) {
+    if (!users_own(m, path) && !in_tree(path, NULL) && strncmp(path, "/bin/", 5) != 0) {
         return "Read-only file system";
     }
     const vfs_node *up = roc_lookup(m, parent);
@@ -1706,7 +1727,7 @@ bool roc_cmd_mv(roc *m, const char *src, const char *dst) {
        host's storage), or a directory of the home; the site's and the
        board's answer as a mount would */
     bool on_disk = m->host.file_move != NULL;
-    if (!under_home(m, from) || (!dir && !on_disk && !ufs_find(&m->uf, from, &data, &len))) {
+    if (!users_own(m, from) || (!dir && !on_disk && !ufs_find(&m->uf, from, &data, &len))) {
         roc_err(m, "mv", src, "Read-only file system");
         return false;
     }
